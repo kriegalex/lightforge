@@ -64,12 +64,14 @@ fn check(name: impl Into<String>, status: Status, detail: impl Into<String>, hin
 }
 
 pub fn run(config: &Config, layout: &Layout, proton_dir: &Path) -> Vec<Check> {
+    let nvidia_version = crate::debug::nvidia_version();
     let mut checks = vec![open_files(), ntsync(), vulkan(), loader(), gnutls()];
+    checks.push(vulkan_32bit(nvidia_version.as_deref()));
     checks.extend(libraries(layout));
     checks.push(proton(config, proton_dir));
     checks.push(python());
     checks.push(prefix(layout));
-    match crate::debug::nvidia_version() {
+    match nvidia_version {
         Some(version) => checks.extend(nvidia(&version)),
         None => checks.extend(open_nvidia(&crate::debug::cards())),
     }
@@ -159,12 +161,23 @@ fn vulkan() -> Check {
 fn icd_files() -> (Option<&'static str>, Vec<PathBuf>) {
     let set = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     if let Some((name, files)) = ICD_OVERRIDES.iter().find_map(|name| Some((*name, set(name)?))) {
-        return (Some(name), std::env::split_paths(&files).collect());
+        return (Some(name), override_files(&files));
     }
 
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let dirs = icd_dirs(set("XDG_DATA_HOME").as_deref(), home.as_deref(), set("XDG_DATA_DIRS").as_deref());
     (None, dirs.iter().flat_map(|dir| json_in(dir)).collect())
+}
+
+/// The files an override lists. The loader also takes a folder there and
+/// reads the manifests in it.
+fn override_files(value: &str) -> Vec<PathBuf> {
+    std::env::split_paths(value)
+        .flat_map(|path| match path.is_dir() {
+            true => json_in(&path),
+            false => vec![path],
+        })
+        .collect()
 }
 
 /// The `.json` files in `dir`, none when it cannot be read.
@@ -246,6 +259,79 @@ fn gnutls() -> Check {
         ),
         None => check("32-bit gnutls", Status::Ok, "unknown, ldconfig could not be read", None),
     }
+}
+
+/// Battle.net's client is 32-bit and draws through Vulkan. With the 32-bit
+/// loader and no 32-bit driver, every other check passes, and the client
+/// closes before its login: its GPU process finds no device.
+fn vulkan_32bit(nvidia: Option<&str>) -> Check {
+    if !runtime::needs_32bit_libraries() {
+        return check("32-bit vulkan", Status::Ok, "not needed on this processor", None);
+    }
+    // ldconfig would see no 32-bit library then, driver or not; the runtime
+    // check warns and names the command.
+    if !runtime::has_32bit_loader() {
+        return check("32-bit vulkan", Status::Ok, "not checked, no 32-bit runtime", None);
+    }
+    let (_, files) = icd_files();
+    let manifests: Vec<(PathBuf, String)> =
+        files.into_iter().filter_map(|file| std::fs::read_to_string(&file).ok().map(|text| (file, text))).collect();
+    // No driver at all is the vulkan check's warning, and an override naming
+    // files that cannot be read says nothing about what is installed.
+    if manifests.is_empty() {
+        return check("32-bit vulkan", Status::Ok, "unknown, no driver file could be read", None);
+    }
+    match has_32bit_driver(&manifests, runtime::has_32bit_lib) {
+        Some(true) => check("32-bit vulkan", Status::Ok, "present", None),
+        Some(false) => {
+            // On NVIDIA's driver Mesa's would not help: it ships its own.
+            let remedy = match nvidia {
+                Some(version) => runtime::nvidia_remedy(version),
+                None => runtime::remedy(),
+            };
+            let hint = format!("Battle.net closes before its login without one; {}", fix(remedy));
+            check("32-bit vulkan", Status::Warn, "no 32-bit driver", Some(hint))
+        }
+        None => check("32-bit vulkan", Status::Ok, "unknown, ldconfig could not be read", None),
+    }
+}
+
+/// Whether a driver manifest names a 32-bit library. A path is judged by the
+/// file: Fedora's `radeon_icd.i686.json` names `/usr/lib/libvulkan_radeon.so`.
+/// A bare name goes to `lookup`, which answers from ldconfig's cache, where
+/// `dlopen` finds it unless `LD_LIBRARY_PATH` points elsewhere: Arch and
+/// Debian ship one manifest for both architectures. `None` when only
+/// `lookup` could tell and it could not.
+fn has_32bit_driver(manifests: &[(PathBuf, String)], lookup: impl Fn(&str) -> Option<bool>) -> Option<bool> {
+    let mut unknown = false;
+    for (file, text) in manifests {
+        let Some(library) = library_path(text) else { continue };
+        let found = match library.contains('/') {
+            // The loader reads a relative path from the manifest's folder.
+            true => is_elf32(&file.parent().unwrap_or(Path::new("/")).join(&library)),
+            false => lookup(&library).unwrap_or_else(|| {
+                unknown = true;
+                false
+            }),
+        };
+        if found {
+            return Some(true);
+        }
+    }
+    (!unknown).then_some(false)
+}
+
+/// `ICD.library_path` from a driver manifest.
+fn library_path(manifest: &str) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_str(manifest).ok()?;
+    Some(json.get("ICD")?.get("library_path")?.as_str()?.to_owned())
+}
+
+/// Whether `path` is a 32-bit ELF file: the magic, then class 1.
+fn is_elf32(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 5];
+    std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut head)).is_ok() && head == *b"\x7fELF\x01"
 }
 
 fn libraries(layout: &Layout) -> Vec<Check> {
@@ -445,6 +531,86 @@ Max locked memory         8388608              8388608              bytes
         assert_eq!(dirs[0], Path::new("/data/vulkan/icd.d"));
         assert_eq!(dirs[1], Path::new("/usr/local/share/vulkan/icd.d"));
         assert_eq!(dirs[2], Path::new("/usr/share/vulkan/icd.d"));
+    }
+
+    /// Mesa's radeon manifest on a CachyOS desktop, 2026-11-09: one file for
+    /// both architectures, naming the library without a folder.
+    const ARCH_RADEON: &str =
+        r#"{"ICD": {"api_version": "1.4.354", "library_path": "libvulkan_radeon.so"}, "file_format_version": "1.0.1"}"#;
+
+    /// As Fedora 45's mesa-vulkan-drivers writes them, one per architecture.
+    fn fedora_manifest(library: &str, arch: &str) -> String {
+        format!(
+            r#"{{"ICD": {{"api_version": "1.4.354", "library_arch": "{arch}", "library_path": "{library}"}}, "file_format_version": "1.0.1"}}"#
+        )
+    }
+
+    #[test]
+    fn a_32_bit_loader_with_a_64_bit_driver_has_no_32_bit_driver() {
+        // What the Arch command left: lib32-vulkan-icd-loader beside vulkan-radeon.
+        let manifests = [
+            (PathBuf::from("/usr/share/vulkan/icd.d/radeon_icd.json"), ARCH_RADEON.to_owned()),
+            (PathBuf::from("/usr/share/vulkan/icd.d/broken.json"), "not json".to_owned()),
+            (PathBuf::from("/usr/share/vulkan/icd.d/layer.json"), r#"{"layer": {}}"#.to_owned()),
+        ];
+        assert_eq!(has_32bit_driver(&manifests, |_| Some(false)), Some(false));
+        assert_eq!(has_32bit_driver(&manifests, |lib| Some(lib == "libvulkan_radeon.so")), Some(true));
+    }
+
+    #[test]
+    fn a_driver_named_by_path_is_judged_by_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("radeon64.so"), b"\x7fELF\x02\x01\x01\0").unwrap();
+        std::fs::write(dir.path().join("radeon32.so"), b"\x7fELF\x01\x01\x01\0").unwrap();
+        let at = |name: &str| dir.path().join(name);
+        let x86_64 = (at("radeon_icd.x86_64.json"), fedora_manifest(&at("radeon64.so").to_string_lossy(), "64"));
+        let i686 = (at("radeon_icd.i686.json"), fedora_manifest(&at("radeon32.so").to_string_lossy(), "32"));
+        let relative = (at("radeon_icd.json"), fedora_manifest("./radeon32.so", "32"));
+        // A path settles it either way, with no ldconfig to ask.
+        let no_cache = |_: &str| None;
+        assert_eq!(has_32bit_driver(std::slice::from_ref(&x86_64), no_cache), Some(false));
+        assert_eq!(has_32bit_driver(&[x86_64.clone(), i686], no_cache), Some(true));
+        assert_eq!(has_32bit_driver(&[x86_64, relative], no_cache), Some(true));
+
+        std::fs::write(at("short.so"), b"\x7fEL").unwrap();
+        std::fs::write(at("script.so"), b"#!/bin/sh\n").unwrap();
+        for not_32 in ["short.so", "script.so", "missing.so"] {
+            assert!(!is_elf32(&at(not_32)), "{not_32}");
+        }
+    }
+
+    #[test]
+    fn a_bare_name_without_ldconfig_is_unknown_rather_than_missing() {
+        let bare = (PathBuf::from("/usr/share/vulkan/icd.d/radeon_icd.json"), ARCH_RADEON.to_owned());
+        assert_eq!(has_32bit_driver(std::slice::from_ref(&bare), |_| None), None);
+
+        // Unknown neither hides a driver found by its path nor turns a 64-bit
+        // one into a missing 32-bit one.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("radeon32.so"), b"\x7fELF\x01\x01\x01\0").unwrap();
+        std::fs::write(dir.path().join("radeon64.so"), b"\x7fELF\x02\x01\x01\0").unwrap();
+        let by_path = |name: &str, arch: &str| (dir.path().join(format!("{arch}.json")), fedora_manifest(name, arch));
+        let i686 = by_path("./radeon32.so", "32");
+        let x86_64 = by_path("./radeon64.so", "64");
+        assert_eq!(has_32bit_driver(&[bare.clone(), i686], |_| None), Some(true));
+        assert_eq!(has_32bit_driver(&[bare, x86_64], |_| None), None);
+    }
+
+    /// The loader takes folders in `VK_DRIVER_FILES` too. Read as a file, a
+    /// folder would leave no manifest and a false "no 32-bit driver".
+    #[test]
+    fn a_folder_in_an_override_stands_for_its_manifests() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("icd.d");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("radeon_icd.json"), ARCH_RADEON).unwrap();
+        std::fs::write(folder.join("README"), "not a manifest").unwrap();
+        let single = dir.path().join("nvidia_icd.json");
+        let value = std::env::join_paths([&folder, &single]).unwrap();
+
+        let mut files = override_files(&value.to_string_lossy());
+        files.sort();
+        assert_eq!(files, [folder.join("radeon_icd.json"), single]);
     }
 
     #[test]
