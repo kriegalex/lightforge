@@ -456,7 +456,8 @@ pub struct AppDirs {
 
 impl AppDirs {
     pub fn discover() -> Result<Self, PathError> {
-        let dirs = directories::ProjectDirs::from("io", "Tuxcore", "Lightforge")
+        let (qualifier, organisation, application) = crate::identity::PROJECT_DIRS;
+        let dirs = directories::ProjectDirs::from(qualifier, organisation, application)
             .ok_or(PathError::NoHomeDirectory)?;
         Ok(Self {
             config: dirs.config_dir().to_path_buf(),

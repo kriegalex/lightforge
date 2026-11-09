@@ -58,6 +58,7 @@ use lightforge_core::addons::Channel;
 use lightforge_core::assets::{Manifest, Pipeline, Store};
 use lightforge_core::config::{Config, SteamOsUse};
 use lightforge_core::debug::DebugInfo;
+use lightforge_core::identity::{APP_ID, DISCORD_URL, KOFI_URL, PAYPAL_URL, X_URL};
 use lightforge_core::library;
 use lightforge_core::net::Http;
 use lightforge_core::paths::{AppDirs, Layout};
@@ -76,10 +77,6 @@ use tasks::{Problem, Refreshed, SharedDownloads, TransferState};
 
 /// Where a player manages their subscription, per the spec.
 const ACCOUNT_URL: &str = "https://account.battle.net/games";
-
-/// The desktop entry's basename, Wayland `app_id` and AppStream id, which
-/// must match (`packaging/README.md`).
-const APP_ID: &str = "pro.tuxcore.Lightforge";
 
 /// Opening size and resize floor: below it the right-hand column, and PLAY,
 /// would go. Fits a 1366x768 laptop.
@@ -640,15 +637,6 @@ const SHOP_URL: &str = "https://shop.battle.net";
 const STEAM_KEYBOARD: &str = "steam://open/keyboard";
 /// And to put it away: the pair SDL uses, found in Steam's own libSDL3.
 const STEAM_KEYBOARD_CLOSE: &str = "steam://close/keyboard";
-
-/// Where the app menu's links point. `None` is a destination that does not
-/// exist yet: the entry draws dimmed and unclickable until it is filled in.
-const DISCORD_URL: Option<&str> = Some("https://discord.gg/vtTgmUV9Bq");
-const X_URL: Option<&str> = Some("https://x.com/simplyKennybtw");
-/// Where someone can say thanks. Offered, never asked for: these sit beside
-/// the places to get help, not in front of anything.
-const KOFI_URL: Option<&str> = Some("https://ko-fi.com/simplykenny");
-const PAYPAL_URL: Option<&str> = Some("https://paypal.me/simplykenny");
 
 #[cfg(test)]
 mod tests;

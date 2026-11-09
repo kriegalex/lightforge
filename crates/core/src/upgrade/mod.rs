@@ -19,27 +19,14 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::identity::{COPR_ENABLE, COPR_REPO, INSTALLER_COMMAND, PKGBUILDS, RELEASE_DOWNLOADS, REPOSITORY};
 use crate::net::{Http, NetError};
 
 pub mod appimage;
 pub mod tarball;
 pub mod terminal;
 
-/// Where every release's files are published.
-const DOWNLOADS: &str = "https://github.com/LightforgeProject/lightforge/releases/download";
-
-/// The Arch packages, as the release left them on `main`: the tag still has
-/// `sha256sums=('SKIP')`, the checksums are committed after it.
-const PKGBUILDS: &str =
-    "https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/aur";
-
-/// The one-line install for everyone the routes below cannot help.
-pub const INSTALLER_COMMAND: &str = "curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh | bash";
-
 const NIX_STORE: &str = "/nix/store";
-
-/// The COPR repository's file, as `dnf copr enable` writes it.
-const COPR_REPO: &str = "etc/yum.repos.d/_copr:copr.fedorainfracloud.org:simplykenny:lightforge.repo";
 
 /// How this copy of Lightforge was installed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,7 +138,7 @@ impl Origin {
                  a release.",
             ),
             Self::Rpm { atomic: true } => say(
-                &["sudo dnf5 copr enable simplykenny/lightforge", "rpm-ostree upgrade"],
+                &[COPR_ENABLE, "rpm-ostree upgrade"],
                 "This system boots from an image, and a downloaded .rpm does not update \
                  itself there. The COPR repository does: enable it once, and Lightforge \
                  updates with the system from then on.",
@@ -167,8 +154,7 @@ impl Origin {
             },
             Self::Cargo => Route::Instructions {
                 commands: vec![format!(
-                    "cargo install --locked --git https://github.com/LightforgeProject/lightforge \
-                     --tag v{version} lightforge-gui"
+                    "cargo install --locked --git {REPOSITORY} --tag v{version} lightforge-gui"
                 )],
                 note: "This Lightforge was installed with cargo.".to_owned(),
             },
@@ -274,7 +260,7 @@ pub async fn fetch_asset(
     dir: &Path,
     on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<PathBuf, UpgradeError> {
-    let base = format!("{DOWNLOADS}/v{version}");
+    let base = format!("{RELEASE_DOWNLOADS}/v{version}");
     let sums = http.get_text(&format!("{base}/SHA256SUMS")).await?;
     let (expected, name) = listed(&sums, suffix).ok_or_else(|| UpgradeError::NotPublished {
         version: version.to_owned(),
