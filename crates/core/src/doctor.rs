@@ -132,28 +132,16 @@ fn ntsync() -> Check {
 }
 
 fn vulkan() -> Check {
-    let set = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
-    if let Some((name, files)) = ICD_OVERRIDES.iter().find_map(|name| Some((*name, set(name)?))) {
-        let mut drivers: Vec<String> = std::env::split_paths(&files)
-            .filter_map(|file| Some(file.file_name()?.to_string_lossy().into_owned()))
-            .collect();
-        drivers.sort();
-        drivers.dedup();
-        return check("vulkan", Status::Ok, format!("set by {name}: {}", drivers.join(", ")), None);
-    }
-
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let dirs = icd_dirs(set("XDG_DATA_HOME").as_deref(), home.as_deref(), set("XDG_DATA_DIRS").as_deref());
-    let mut drivers: Vec<String> = dirs
+    let (overridden, files) = icd_files();
+    let mut drivers: Vec<String> = files
         .iter()
-        .filter_map(|dir| std::fs::read_dir(dir).ok())
-        .flatten()
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".json"))
+        .filter_map(|file| Some(file.file_name()?.to_string_lossy().into_owned()))
         .collect();
     drivers.sort();
     drivers.dedup();
+    if let Some(name) = overridden {
+        return check("vulkan", Status::Ok, format!("set by {name}: {}", drivers.join(", ")), None);
+    }
     match drivers.is_empty() {
         // Warn: a driver somewhere this does not look still counts.
         true => check(
@@ -164,6 +152,30 @@ fn vulkan() -> Check {
         ),
         false => check("vulkan", Status::Ok, drivers.join(", "), None),
     }
+}
+
+/// The driver files the loader reads: the ones an override variable names,
+/// returned with that variable, or every `.json` in the driver directories.
+fn icd_files() -> (Option<&'static str>, Vec<PathBuf>) {
+    let set = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    if let Some((name, files)) = ICD_OVERRIDES.iter().find_map(|name| Some((*name, set(name)?))) {
+        return (Some(name), std::env::split_paths(&files).collect());
+    }
+
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let dirs = icd_dirs(set("XDG_DATA_HOME").as_deref(), home.as_deref(), set("XDG_DATA_DIRS").as_deref());
+    (None, dirs.iter().flat_map(|dir| json_in(dir)).collect())
+}
+
+/// The `.json` files in `dir`, none when it cannot be read.
+fn json_in(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
+        .map(|entry| entry.path())
+        .collect()
 }
 
 /// The driver directories the loader searches, from the XDG variables as
@@ -192,15 +204,18 @@ fn loader() -> Check {
     if runtime::has_32bit_loader() {
         return check("32-bit runtime", Status::Ok, "present", None);
     }
-    let remedy = runtime::remedy();
-    let fix = match (remedy.command, remedy.note) {
+    let hint = format!("Battle.net is 32-bit, the games are not; {}", fix(runtime::remedy()));
+    check("32-bit runtime", Status::Warn, "no 32-bit loader", Some(hint))
+}
+
+/// A distribution's remedy as one line of a hint.
+fn fix(remedy: runtime::Remedy) -> String {
+    match (remedy.command, remedy.note) {
         (Some(command), Some(note)) => format!("on {}: {command} ({note})", remedy.distro),
         (Some(command), None) => format!("on {}: {command}", remedy.distro),
         (None, Some(note)) => note,
         (None, None) => "install your distribution's 32-bit libraries".to_owned(),
-    };
-    let hint = format!("Battle.net is 32-bit, the games are not; {fix}");
-    check("32-bit runtime", Status::Warn, "no 32-bit loader", Some(hint))
+    }
 }
 
 /// `proton` is a Python script. Without an interpreter, starting it fails
