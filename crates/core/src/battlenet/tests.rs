@@ -12,13 +12,12 @@ fn starting_in_the_tray_is_a_global_key_written_as_a_string() {
 #[test]
 fn an_autostart_is_the_plain_client_start_plus_the_flag_that_unlocks_it() {
     let dir = PathBuf::from("/bnet");
-    let (plain, no_args) = Launch::Client.command(&dir);
+    let (plain, _) = Launch::Client.command(&dir);
     let (exe, args) = Launch::Autostart.command(&dir);
 
     // Same binary: the launcher keeps the client's self-update working.
     assert_eq!(exe, plain);
-    assert!(no_args.is_empty());
-    assert_eq!(args, ["--autostarted"]);
+    assert_eq!(args, ["--autostarted", "--in-process-gpu"]);
     // It opens the client; it hands nothing off.
     assert!(!Launch::Autostart.hands_off());
 }
@@ -56,11 +55,12 @@ fn a_uri_is_the_command_the_system_protocol_handler_sends() {
     let dir = PathBuf::from("/bn");
     let (exe, args) = Launch::Uri(game_uri("W1R")).command(&dir);
 
-    // Exactly what Wine registered for battlenet:// at install time, so
-    // the client treats it as a protocol link and queues it for its
-    // UriController instead of applying it mid-startup and losing it.
+    // What Wine registered for battlenet:// at install time, so the client
+    // treats it as a protocol link and queues it for its UriController
+    // instead of applying it mid-startup and losing it. The GPU switch goes
+    // after it.
     assert_eq!(exe, dir.join("Battle.net.exe"));
-    assert_eq!(args, vec!["--uri=battlenet://W1R"]);
+    assert_eq!(args, vec!["--uri=battlenet://W1R", "--in-process-gpu"]);
     assert!(Launch::Uri(game_uri("W1R")).hands_off());
 }
 
@@ -614,11 +614,31 @@ fn dxva2_is_set_through_reg_add() {
 }
 
 #[test]
-fn a_plain_open_runs_the_launcher_with_no_arguments() {
+fn a_plain_open_runs_the_launcher_with_only_the_gpu_switch() {
     let dir = Path::new("/prefix/Battle.net");
     let (exe, args) = Launch::Client.command(dir);
     assert_eq!(exe, dir.join("Battle.net Launcher.exe"));
-    assert!(args.is_empty());
+    assert_eq!(args, ["--in-process-gpu"]);
+}
+
+/// Any launch can be the one that starts the client, and a client started
+/// without the switch can keep a white window.
+#[test]
+fn every_launch_carries_the_gpu_switch_once() {
+    let dir = Path::new("/prefix/Battle.net");
+    for launch in [
+        Launch::Client,
+        Launch::Autostart,
+        Launch::product(ProductCode::Retail),
+        // Falls back to a plain open, which must not add it twice.
+        Launch::product(ProductCode::Custom("turtle_wow".into())),
+        Launch::InstallFlow { uid: "w1r".into() },
+        Launch::Uri(game_uri("WTCG")),
+    ] {
+        let (_, args) = launch.command(dir);
+        let switches = args.iter().filter(|arg| *arg == "--in-process-gpu").count();
+        assert_eq!(switches, 1, "{launch:?}: {args:?}");
+    }
 }
 
 /// An unknown uid makes the client fall back to its first family, Warcraft
@@ -737,18 +757,18 @@ fn a_product_hand_off_goes_to_battle_net_exe_with_productcode_and_exec() {
     let (exe, args) = Launch::product(ProductCode::Retail).command(dir);
     assert_eq!(exe, dir.join("Battle.net.exe"));
     // The exec uid is the client's family id, not the TACT code.
-    assert_eq!(args, ["--productcode=wow", "--exec=launch WoW"]);
+    assert_eq!(args, ["--productcode=wow", "--exec=launch WoW", "--in-process-gpu"]);
 
     let (_, classic) = Launch::product(ProductCode::Classic).command(dir);
     // Every Classic-line product shares one tile.
-    assert_eq!(classic, ["--productcode=wow_classic", "--exec=launch WoWC"]);
+    assert_eq!(classic, ["--productcode=wow_classic", "--exec=launch WoWC", "--in-process-gpu"]);
 }
 
 #[test]
 fn an_explicit_exec_verb_overrides_the_derived_uid() {
     let (_, args) = Launch::Product { code: ProductCode::Retail, exec: Some("WoW".into()) }
         .command(Path::new("/prefix/Battle.net"));
-    assert_eq!(args, ["--productcode=wow", "--exec=launch WoW"]);
+    assert_eq!(args, ["--productcode=wow", "--exec=launch WoW", "--in-process-gpu"]);
 }
 
 #[test]

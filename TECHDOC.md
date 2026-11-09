@@ -313,6 +313,15 @@ nothing to do with the shop.
 `battlenet.rs` installs the client into the prefix without user input and
 sets the registry and config defaults that keep it from getting in the way.
 
+Every start Lightforge makes carries `--in-process-gpu`, which `Battle.net
+Launcher.exe` passes on: Chromium then does the client's GPU work in its
+browser process instead of a separate one. Without it the window can stay
+white: in every start tested with the "Wayland backend" setting on
+proton-cachyos 11, and in about one start in sixteen on the default XWayland
+path. The cost is that a GPU crash takes the client with it, where Chromium
+would restart a separate GPU process. The switch doesn't reach the in-game
+shop, above.
+
 For games outside the WoW family, Lightforge hands off to Battle.net, and the
 hard part is naming the game correctly. The client works in **game families**
 (`WTCG`, `Fen`, `Pro`), not TACT product codes, and `--exec="launch <uid>"`

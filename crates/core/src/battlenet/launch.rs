@@ -7,6 +7,16 @@ use crate::paths::Layout;
 use crate::prefix::{PrefixError, ProtonRunner};
 use crate::product::ProductCode;
 
+/// Chromium's switch that runs the client's GPU work in its browser process
+/// instead of a separate one. Without it the window can stay white: in every
+/// start tested with the "Wayland backend" setting on proton-cachyos 11, and
+/// in 2 of 32 on the default XWayland path with GE-Proton11-7 (client 2.53.8,
+/// measured 2026-11-09). CachyOS/proton-cachyos#142 gives it as the fix.
+/// The cost: a GPU crash takes the client with it, where Chromium would
+/// restart a separate GPU process. `Battle.net Launcher.exe` passes it on,
+/// and the client runs as `Battle.net.exe --in-process-gpu --from-launcher`.
+const IN_PROCESS_GPU: &str = "--in-process-gpu";
+
 /// How to open Battle.net.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Launch {
@@ -40,9 +50,10 @@ impl Launch {
     /// The executable and arguments this launch needs, relative to
     /// `install_dir`. Plain opens use `Battle.net Launcher.exe`, as Blizzard's
     /// shortcut does, which keeps self-update working. A hand-off goes to
-    /// `Battle.net.exe`, which parses `--productcode`/`--exec`.
+    /// `Battle.net.exe`, which parses `--productcode`/`--exec`. Each ends with
+    /// `--in-process-gpu`: any of them can be the call that starts the client.
     pub fn command(&self, install_dir: &Path) -> (PathBuf, Vec<String>) {
-        match self {
+        let (exe, mut args) = match self {
             Self::Client => (install_dir.join("Battle.net Launcher.exe"), Vec::new()),
             // Through the launcher, like a plain start; it passes its command
             // line on to the client.
@@ -67,9 +78,11 @@ impl Launch {
                     ],
                 ),
                 // No family id: a guess opens the wrong game, so just open the client.
-                None => Self::Client.command(install_dir),
+                None => return Self::Client.command(install_dir),
             },
-        }
+        };
+        args.push(IN_PROCESS_GPU.to_owned());
+        (exe, args)
     }
 
     /// Whether this launch hands off, or only opens the client.
