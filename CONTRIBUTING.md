@@ -91,8 +91,9 @@ Poke me in Discord if I have.
 **Small things are very welcome**: typos, wording, a doc that's wrong. One in
 particular: [INSTALL.md](INSTALL.md) lists the 32-bit package Battle.net's
 installer needs on four distributions, and **only the Fedora line has been
-tested on a real machine**. If you run Debian, Arch or openSUSE and can
-confirm or correct yours, that helps a lot.
+tested on a real machine** (Arch in a clean container, on AMD). If you run
+Debian, openSUSE, or Arch on Intel, and can confirm or correct yours, that
+helps a lot.
 
 The repository lives on my own Forgejo at `git.tuxcore.pro`, and you need an
 account there to open a pull request. If that's a hassle, send a patch or a

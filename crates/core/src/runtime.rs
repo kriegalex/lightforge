@@ -356,12 +356,24 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
             None,
         )
     } else if os.is("arch") {
-        // UNVERIFIED on a clean install. Arch's `wine` has been pure WoW64
-        // since June 2025 and pulls no lib32 package at all; Proton's 32-bit
-        // Wine still loads the host's. These are on a CachyOS desktop where
-        // Battle.net works, gnutls being the one SteamOS lacked.
+        // VERIFIED in a clean Arch container (AMD GPU, no Steam). Arch's
+        // `wine` has been pure WoW64 since June 2025 and pulls no lib32
+        // package; Proton's 32-bit Wine still loads the host's. gnutls,
+        // freetype and the Vulkan loader pass our checks, and then the
+        // installer gets no window driver: winex11 links libX11 and
+        // libXext, and of these packages only lib32-mesa brings libXext.
+        // With it, Battle.net installs, but the client closes before its
+        // login: its GPU process finds the loader and no driver. A Steam
+        // desktop has all of it already. Both Mesa Vulkan drivers, so no
+        // GPU has to be detected: on AMD or Intel the other one, with the
+        // 64-bit driver it pulls in, is 37 to 88 MiB installed. NVIDIA's
+        // own is `nvidia_remedy`.
         (
-            Some("sudo pacman -S lib32-gnutls lib32-freetype2 lib32-vulkan-icd-loader".to_owned()),
+            Some(
+                "sudo pacman -S lib32-gnutls lib32-freetype2 lib32-mesa \
+                 lib32-vulkan-radeon lib32-vulkan-intel"
+                    .to_owned(),
+            ),
             Some(
                 "lib32 packages live in the multilib repository — if pacman \
                  cannot find them, uncomment the `[multilib]` section in \
@@ -577,6 +589,19 @@ mod remedy_tests {
     fn arch_warns_about_multilib() {
         let remedy = remedy_for(&os("arch", ""));
         assert!(remedy.note.unwrap().contains("multilib"));
+    }
+
+    /// The Vulkan loader alone passes every check, and then Battle.net's GPU
+    /// process finds no driver; winex11's libXext comes only with mesa.
+    #[test]
+    fn arch_names_a_vulkan_driver_not_just_the_loader() {
+        let command = remedy_for(&os("arch", "")).command.unwrap();
+        let packages: Vec<&str> = command.split_whitespace().collect();
+        assert!(packages.contains(&"lib32-mesa"), "no 32-bit libXext without mesa: {command}");
+        assert!(
+            packages.iter().any(|p| p.starts_with("lib32-vulkan-") && *p != "lib32-vulkan-icd-loader"),
+            "a loader with no driver gives Battle.net no GPU: {command}"
+        );
     }
 
     /// Distributions where running a package manager would be wrong get a

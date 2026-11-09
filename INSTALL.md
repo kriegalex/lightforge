@@ -228,12 +228,13 @@ starts and shows the command for your distro. Here they are:
 | **Fedora** | `sudo dnf install wine.i686` ✅ verified on Fedora 44 |
 | **Fedora Atomic** (Bazzite, Silverblue) | `rpm-ostree install --apply-live wine.i686` (if it refuses: without the flag, then reboot) |
 | **Debian / Ubuntu** | `sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install wine32:i386` |
-| **Arch** | `sudo pacman -S lib32-gnutls lib32-freetype2 lib32-vulkan-icd-loader` (multilib must be enabled; Arch's `wine` no longer brings them) |
+| **Arch** | `sudo pacman -S lib32-gnutls lib32-freetype2 lib32-mesa lib32-vulkan-radeon lib32-vulkan-intel` ✅ verified in a clean Arch container with an AMD GPU (multilib must be enabled; Arch's `wine` no longer brings them) |
 | **openSUSE** | `sudo zypper install wine-32bit` |
 
-**Only the Fedora line has been tested on a real machine.** The others should
-be right for how those distributions are packaged, but I haven't tested them.
-If one is wrong, tell me in Discord and I'll fix it.
+**Only the Fedora and Arch lines have been tested**: Fedora on a real machine,
+Arch in a clean container with an AMD GPU. The others should be right for how
+those distributions are packaged, but I haven't tested them. If one is wrong,
+tell me in Discord and I'll fix it.
 
 Two more details:
 
@@ -241,6 +242,9 @@ Two more details:
   Wine. What's really needed is the 32-bit graphics stack, and the distro's
   `wine` package pulls in all of it. On Fedora, `glibc.i686` and
   `freetype.i686` alone pass every check, and the installer still fails.
+  Arch's `wine` is 64-bit only, so its line names the stack itself: without
+  `lib32-mesa` the installer fails, and without a 32-bit Vulkan driver
+  Battle.net closes before its login.
 - On Debian, installing Steam also fixes it, because the Steam package enables
   i386 and pulls in the 32-bit libraries. You shouldn't need Steam for this,
   though.
