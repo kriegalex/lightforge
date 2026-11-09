@@ -6,17 +6,11 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use lightforge_core::identity::{REPORT_DSN, SCREENSHOT_UPLOAD};
 use lightforge_core::net::Http;
-
-/// Our GlitchTip project; a DSN is a write-only key meant to ship.
-const DSN: &str = "https://788f3511837f42abade303476cdeef11@bugs.k3nny.tech/1";
 
 /// How long to wait for the event to leave: the dialog says it was sent.
 const FLUSH: Duration = Duration::from_secs(15);
-
-/// Where a screenshot is uploaded, so the issue carries a link (GlitchTip
-/// drops attachments). `/upload`: the proxy routes `/shots/v1/*` only.
-const SHOTS: &str = "https://lightforge.tuxcore.pro/shots/v1/upload";
 
 /// How long the upload may take before the report goes without it.
 ///
@@ -195,7 +189,7 @@ fn client(http: Option<Http>, runtime: tokio::runtime::Handle) -> Option<Arc<sen
             options.before_send = Some(Arc::new(without_machine_details));
 
             // Parsed: `from_config` panics on a malformed DSN.
-            let Ok(dsn) = DSN.parse::<sentry::types::Dsn>() else { return None };
+            let Ok(dsn) = REPORT_DSN.parse::<sentry::types::Dsn>() else { return None };
             options.dsn = Some(dsn);
 
             // Before `apply_defaults`, which only fills in a missing transport.
@@ -253,7 +247,7 @@ async fn upload(shot: &Shot, http: Option<&Http>) -> Picture {
 
     let Some(http) = http else { return embed() };
     let uploaded: Result<Uploaded, _> =
-        http.post_bytes(SHOTS, shot.media_type, shot.bytes.clone(), UPLOAD).await;
+        http.post_bytes(SCREENSHOT_UPLOAD, shot.media_type, shot.bytes.clone(), UPLOAD).await;
     match uploaded {
         Ok(Uploaded { url }) if url.starts_with("https://") => Picture::Link(url),
         _ => embed(),

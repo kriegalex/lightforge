@@ -525,7 +525,7 @@ fn addon_origin(
         Config::load_or_default(&dirs.config_file())
             .map(|c| c.catalog_origin())
             .unwrap_or_else(|_| Origin::Http(
-                lightforge_core::config::DEFAULT_ADDON_CATALOG.to_owned(),
+                lightforge_core::identity::DEFAULT_ADDON_CATALOG.to_owned(),
             )),
     )
 }

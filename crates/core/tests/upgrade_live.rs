@@ -11,6 +11,7 @@
 //! installs and its AppImage replaces an older one, all in a temporary folder
 //! (`XDG_DATA_HOME` included).
 
+use lightforge_core::identity::DESKTOP_ENTRY;
 use lightforge_core::net::Http;
 use lightforge_core::upgrade::{self, tarball};
 
@@ -32,7 +33,7 @@ async fn the_published_release_installs_and_every_package_is_found() {
     let said = String::from_utf8_lossy(&cli.stdout);
     println!("installed: {said}");
     assert!(said.contains(VERSION), "{said}");
-    let entry = std::fs::read_to_string(data.join("applications/pro.tuxcore.Lightforge.desktop")).unwrap();
+    let entry = std::fs::read_to_string(data.join("applications").join(DESKTOP_ENTRY)).unwrap();
     assert!(entry.contains(&bin.join("lightforge-gui").display().to_string()), "{entry}");
 
     let appimage = dir.join("Desktop").join(upgrade::appimage::asset());

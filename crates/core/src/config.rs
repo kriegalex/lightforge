@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::identity::{DEFAULT_ADDON_CATALOG, DEFAULT_ASSETS_SOURCE};
 use crate::product::{Product, ProductCode};
 use crate::proton::ProtonPin;
 
@@ -133,15 +134,6 @@ pub struct Config {
     #[serde(default)]
     pub companions: Vec<crate::companion::Companion>,
 }
-
-/// Where themed branding comes from unless `assets_source` says otherwise.
-pub const DEFAULT_ASSETS_SOURCE: &str = "https://lightforge.tuxcore.pro/assets/";
-
-/// Where the addon catalog is read from unless `addon_catalog` says otherwise.
-///
-/// CurseForge needs a key, so it goes through a proxy; ours by default. The
-/// keyless providers never come through here.
-pub const DEFAULT_ADDON_CATALOG: &str = "https://lightforge.tuxcore.pro/";
 
 /// Bytes in the megabyte this config counts in.
 const BYTES_PER_MB: u64 = 1_000_000;

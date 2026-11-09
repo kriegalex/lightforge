@@ -53,10 +53,11 @@ read it from there.
 ## One string, three places
 
 `pro.tuxcore.Lightforge` is the AppStream component id, the desktop entry's
-basename **and** the window's Wayland `app_id` (`APP_ID` in the GUI's
-`main.rs`). A compositor matches a running window to its installed desktop
-entry by that string and by nothing else, so if one of the three changes and
-the others do not, the taskbar shows a placeholder instead of the icon.
+basename **and** the window's Wayland `app_id` (`APP_ID` in
+`crates/core/src/identity.rs`). A compositor matches a running window to its
+installed desktop entry by that string and by nothing else, so if one of the
+three changes and the others do not, the taskbar shows a placeholder instead
+of the icon.
 
 ## Building the packages
 
