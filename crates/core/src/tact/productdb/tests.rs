@@ -554,6 +554,50 @@ mod reading {
         // client its own components are gone.
         assert!(!register(&dir, &[install("wow", "1.0.0")]).unwrap());
         assert!(!dir.join("product.db").exists());
+        assert!(register_missing(&dir, &[install("wow", "1.0.0")]).unwrap().is_empty());
+        assert!(!dir.join("product.db").exists());
+    }
+
+    #[test]
+    fn registering_what_is_missing_leaves_agent_s_own_records_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        // Agent's record of Forever is behind what `.build.info` says: it is
+        // Agent's to change, not ours.
+        let mut agent = encode(&[install("wowf", "1.60.0.1")]);
+        let mut settings = Vec::new();
+        string_field(&mut settings, 1, "C:/Program Files (x86)/Hearthstone");
+        let mut hearthstone = Vec::new();
+        string_field(&mut hearthstone, 1, "hs_beta");
+        string_field(&mut hearthstone, 2, "hsb");
+        message_field(&mut hearthstone, 3, &settings);
+        message_field(&mut agent, 1, &hearthstone);
+        std::fs::write(dir.path().join("product.db"), &agent).unwrap();
+
+        // Hearthstone is `hs_beta` to Agent and `hsb` to the CDN: either name
+        // means Agent has it. A product offered twice goes in once: Agent
+        // keeps one record per uid.
+        let offered = [
+            install("wow", "12.1.5.1"),
+            install("wowf", "1.60.1.2"),
+            install("hsb", "36.6.0.2"),
+            install("wow", "12.1.5.2"),
+        ];
+        let added = register_missing(dir.path(), &offered).unwrap();
+        assert_eq!(added, ["wow"]);
+
+        let read = super::read(&dir.path().join("product.db")).unwrap();
+        let versions: Vec<_> =
+            read.iter().map(|r| (r.product.as_str(), r.version.as_deref())).collect();
+        assert_eq!(
+            versions,
+            [("wowf", Some("1.60.0.1")), ("hs_beta", None), ("wow", Some("12.1.5.1"))]
+        );
+
+        // Once there, the record is Agent's: a newer one of ours does not
+        // replace it.
+        let before = std::fs::read(dir.path().join("product.db")).unwrap();
+        assert!(register_missing(dir.path(), &[install("wow", "12.1.5.9")]).unwrap().is_empty());
+        assert_eq!(std::fs::read(dir.path().join("product.db")).unwrap(), before);
     }
 
     #[test]

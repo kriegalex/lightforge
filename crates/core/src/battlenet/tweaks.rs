@@ -125,8 +125,9 @@ pub fn set_download_limit(
     Ok(())
 }
 
-/// Keep Agent's hands off products Lightforge downloads itself, so two
-/// programs never maintain one CASC store. Titles Battle.net installed are
+/// Keep Agent's hands off products in Lightforge's WoW installs, so two
+/// programs never maintain one CASC store: the ones it manages, and the
+/// others Battle.net has no settings for. Titles Battle.net installed are
 /// left to it.
 pub fn product_tweaks(codes: &[ProductCode]) -> Vec<Tweak> {
     codes
@@ -136,7 +137,7 @@ pub fn product_tweaks(codes: &[ProductCode]) -> Vec<Tweak> {
                 Tweak::new(
                     &format!("Games.{code}.AutoUpdate"),
                     json!("false"),
-                    "Lightforge patches this product; Agent must not race it into the store",
+                    "Lightforge writes to this product's store; Agent must not race it there",
                 ),
                 Tweak::new(
                     &format!("Games.{code}.DownloadAllUpdates"),

@@ -134,6 +134,20 @@ impl Preflight {
         let staging = remove_dir(&layout.battle_net_staging())?;
         stamp(&mut timings, "clear caches");
 
+        // Agent must know every game in a store, or an update reclaims the
+        // files of those it does not. Not fatal: a registry that cannot be
+        // written leaves Battle.net as it was.
+        let installed = super::registry::installed(layout);
+        let added = crate::tact::productdb::register_missing(&layout.agent_dir(), &installed)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Battle.net's registry: {}", crate::error::chain(&e));
+                Vec::new()
+            });
+        if !added.is_empty() {
+            tracing::info!("added {added:?} to Battle.net's registry, which had no record of them");
+        }
+        stamp(&mut timings, "registry");
+
         // The client recreates the per-account file on login and after a
         // prefix update, without `HideOnClose`, so it is re-applied every launch.
         let mut tweaks = battlenet::default_tweaks(layout, self.background);
@@ -155,6 +169,20 @@ impl Preflight {
                 battlenet::restore_overrides(layout, &self.user)?;
             }
         }
+        // And the other games in those installs Battle.net has no settings
+        // for: Agent would update them by itself, into a store Lightforge
+        // downloads into. A game it installed has its own, and so does one the
+        // user turned back on; those stand, outside background mode above.
+        // After the record: an absent key is no choice of the user's, and
+        // putting it back would hand the game to Agent again.
+        let configured = battlenet::known_product_codes(layout, &self.user);
+        let unconfigured: Vec<ProductCode> = installed
+            .iter()
+            .filter(|record| !configured.contains(&record.product))
+            .map(|record| ProductCode::from(record.product.clone()))
+            .filter(|code| !self.managed.contains(code))
+            .collect();
+        tweaks.extend(battlenet::product_tweaks(&unconfigured));
         let mut configs = vec![battlenet::configure(layout, &self.user, &tweaks)?];
         configs.extend(battlenet::configure_accounts(layout, &self.user, &account)?);
 

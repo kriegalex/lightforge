@@ -249,6 +249,21 @@ adopt an install. Lightforge writes it from `.build.info`, so the two always
 agree, and merges a record into Agent's own registry so the client lists the
 game without the user starting a scan.
 
+That registry also decides what Agent keeps. An update ends by reclaiming the
+store space no product in the registry uses (its log shows `Recoverable: …MiB`,
+then `Compaction Completed`), so updating one product of a shared install
+deletes the files of a sibling Agent was never told about. An install adopted
+in a first run, before Battle.net exists, has no registry to go into. So every
+pre-flight pass, with the prefix quiet, adds a record for each product in a
+known WoW install that has a `.build.info` row and a flavor folder, one per
+product, and leaves the records Agent already has alone. A new record takes
+the path Agent already uses for that folder: one folder has several Windows
+paths, and Agent lists the products of a shared install under one of them.
+Agent updates the products it knows by itself, so a game in those installs
+that Battle.net has no settings for also gets the auto-update and background
+download switches Lightforge sets for the products it manages: Lightforge
+writes into its store too. A game Battle.net installed keeps its own.
+
 Reading it back has one trap that caused a real bug: a record has **two**
 names. Field 1 is the client's install key, field 2 is the TACT product code.
 They're the same for every product except Hearthstone, which is `hs_beta` to
@@ -278,9 +293,10 @@ moving any files.
   stack is there, so the suggested fix names the distribution's 32-bit Wine
   package: its dependencies are what's actually needed.
 - **`preflight.rs`** makes sure everything is ready before Battle.net starts:
-  no stale Agent holding a lock, no leftover wineserver, and any download that
-  writes to the CASC store paused first. Two writers in one store can really
-  corrupt it.
+  no stale Agent holding a lock, no leftover wineserver, every game in a known
+  WoW install in Agent's registry (see `.product.db` above), and any download
+  that writes to the CASC store paused first. Two writers in one store can
+  really corrupt it.
 
 ### The in-game shop
 

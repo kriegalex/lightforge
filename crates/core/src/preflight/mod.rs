@@ -12,14 +12,15 @@
 //! 4. with nothing alive: delete Agent's directory *cache* and the installer's
 //!    staging directory, never Agent's own directory, which holds the
 //!    `product.db` registry of installed games,
-//! 5. re-apply the Battle.net config defaults,
-//! 6. pause any download writing to CASC storage.
+//! 5. add every game in a WoW install Lightforge knows to that registry,
+//! 6. re-apply the Battle.net config defaults,
+//! 7. pause any download writing to CASC storage.
 //!
 //! A process is only signalled when its own environment names Lightforge's
 //! prefix (`WINEPREFIX` or `STEAM_COMPAT_DATA_PATH`): a Battle.net under
 //! Lutris or Steam has the same names. An unreadable environment means hands off.
 //!
-//! Steps 4 and 5 are gated on step 3 succeeding: the client rewrites its
+//! Steps 4 to 6 are gated on step 3 succeeding: the client rewrites its
 //! configs on exit and Agent memory-maps its cache, so writing into a live
 //! prefix loses the write at best.
 //!
@@ -32,6 +33,7 @@
 
 mod games;
 mod gate;
+mod registry;
 mod scan;
 mod shutdown;
 #[cfg(test)]

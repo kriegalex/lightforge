@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::read::decode_install;
+use super::read::{decode, decode_install};
 use super::wire::{double_field, message_field, read_varint, string_field, varint_field};
 use super::{agent_tags, cpu_from_tags, io, locale_from_tags, ProductDbError};
 use crate::buildinfo::{self, BuildInfo};
@@ -396,6 +396,44 @@ pub fn register(agent_dir: &Path, installs: &[ProductInstall]) -> Result<bool, P
         return Ok(false);
     };
     replace(&path, &existing, &merged)
+}
+
+/// Add `installs` that Agent's registry has no record of, under either of a
+/// record's names, and leave every record it has alone. Returns the products
+/// added.
+///
+/// For games on disk that Lightforge did not just install: Agent's own record
+/// of a product it knows is newer than anything that could be written here.
+/// Same rules as [`register`].
+pub fn register_missing(
+    agent_dir: &Path,
+    installs: &[ProductInstall],
+) -> Result<Vec<String>, ProductDbError> {
+    let path = agent_dir.join("product.db");
+    let existing = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => return Err(ProductDbError::Io { path, source }),
+    };
+
+    let known = decode(&existing);
+    let mut missing: Vec<ProductInstall> = Vec::new();
+    for install in installs {
+        let name = install.product.as_str();
+        match known.iter().find(|k| k.product == name || k.product_code == name) {
+            Some(_) => {}
+            None if missing.iter().any(|m| m.product == install.product) => {}
+            None => missing.push(install.clone()),
+        }
+    }
+    if missing.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(merged) = splice(&existing, &missing) else {
+        return Ok(Vec::new());
+    };
+    replace(&path, &existing, &merged)?;
+    Ok(missing.into_iter().map(|install| install.product).collect())
 }
 
 /// Remove `product` from Agent's registry, so Battle.net stops listing a game
