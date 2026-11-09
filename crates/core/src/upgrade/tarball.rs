@@ -8,10 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use super::{fetch_asset, io, UpgradeError};
+use crate::identity::DESKTOP_ENTRY;
 use crate::net::Http;
-
-/// The menu entry's file name, which is also the app id.
-const ENTRY: &str = "pro.tuxcore.Lightforge.desktop";
 
 /// beta.11 unpacks to 39 MB.
 const MAX_UNPACKED: u64 = 512 << 20;
@@ -59,12 +57,12 @@ fn put_in_place(archive: &Path, bin_dir: &Path, data_dir: &Path) -> Result<(), U
     // Full path: `~/.local/bin` is not on every session's PATH.
     let apps = data_dir.join("applications");
     std::fs::create_dir_all(&apps).map_err(io(&apps))?;
-    let entry = std::fs::read_to_string(release.join(ENTRY)).map_err(io(&release.join(ENTRY)))?;
+    let entry = std::fs::read_to_string(release.join(DESKTOP_ENTRY)).map_err(io(&release.join(DESKTOP_ENTRY)))?;
     let entry = with_full_path(&entry, &bin_dir.join("lightforge-gui"));
-    let written = staging.path().join(ENTRY);
+    let written = staging.path().join(DESKTOP_ENTRY);
     std::fs::write(&written, entry).map_err(io(&written))?;
     // Not a rename: the applications folder can be on another filesystem.
-    std::fs::copy(&written, apps.join(ENTRY)).map_err(io(&apps.join(ENTRY)))?;
+    std::fs::copy(&written, apps.join(DESKTOP_ENTRY)).map_err(io(&apps.join(DESKTOP_ENTRY)))?;
 
     crate::fsutil::copy_tree(&release.join("icons/hicolor"), &data_dir.join("icons/hicolor"))
         .map_err(|(path, source)| UpgradeError::Io { path, source })?;
@@ -113,7 +111,7 @@ fn unpack(archive: &Path, into: &Path) -> Result<PathBuf, UpgradeError> {
         .map(|e| e.path())
         .find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("lightforge-")));
     match top {
-        Some(top) if BINARIES.iter().all(|b| top.join(b).is_file()) && top.join(ENTRY).is_file() => Ok(top),
+        Some(top) if BINARIES.iter().all(|b| top.join(b).is_file()) && top.join(DESKTOP_ENTRY).is_file() => Ok(top),
         _ => Err(UpgradeError::NotARelease(archive.to_path_buf())),
     }
 }
@@ -141,6 +139,7 @@ fn refresh_menu(apps: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::APP_ID;
 
     /// A tarball shaped like a release, written with the same crates that
     /// read it.
@@ -149,8 +148,8 @@ mod tests {
         std::fs::create_dir_all(tree.join("icons/hicolor/64x64/apps")).unwrap();
         std::fs::write(tree.join("lightforge-gui"), "new gui").unwrap();
         std::fs::write(tree.join("lightforge"), "new cli").unwrap();
-        std::fs::write(tree.join(ENTRY), entry).unwrap();
-        std::fs::write(tree.join("icons/hicolor/64x64/apps/pro.tuxcore.Lightforge.png"), "png").unwrap();
+        std::fs::write(tree.join(DESKTOP_ENTRY), entry).unwrap();
+        std::fs::write(tree.join(format!("icons/hicolor/64x64/apps/{APP_ID}.png")), "png").unwrap();
 
         let path = dir.join("release.tar.gz");
         let gz = flate2::write::GzEncoder::new(std::fs::File::create(&path).unwrap(), flate2::Compression::fast());
@@ -190,11 +189,11 @@ mod tests {
 
         assert_eq!(std::fs::read_to_string(bin.join("lightforge-gui")).unwrap(), "new gui");
         assert_eq!(std::fs::read_to_string(bin.join("lightforge")).unwrap(), "new cli");
-        let entry = std::fs::read_to_string(data.join("applications").join(ENTRY)).unwrap();
+        let entry = std::fs::read_to_string(data.join("applications").join(DESKTOP_ENTRY)).unwrap();
         let gui = bin.join("lightforge-gui");
         assert!(entry.contains(&format!("Exec=\"{}\"", gui.display())), "{entry}");
         assert!(entry.contains(&format!("TryExec={}", gui.display())), "{entry}");
-        assert!(data.join("icons/hicolor/64x64/apps/pro.tuxcore.Lightforge.png").is_file());
+        assert!(data.join(format!("icons/hicolor/64x64/apps/{APP_ID}.png")).is_file());
         // Nothing of the unpack is left beside the binaries.
         let left: Vec<_> = std::fs::read_dir(&bin).unwrap().filter_map(Result::ok).map(|e| e.file_name()).collect();
         assert_eq!(left.len(), 2, "{left:?}");

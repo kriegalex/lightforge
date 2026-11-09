@@ -10,6 +10,6 @@ Terminal=false
 Categories=Game;
 Keywords=WoW;World of Warcraft;Blizzard;Battle.net;Proton;Wine;launcher;
 StartupNotify=true
-# Must equal the window's `app_id` (see `APP_ID` in the GUI's `main.rs`), or
-# the compositor shows a placeholder rather than the icon above.
+# Must equal the window's `app_id` (see `APP_ID` in `crates/core/src/identity.rs`),
+# or the compositor shows a placeholder rather than the icon above.
 StartupWMClass=pro.tuxcore.Lightforge

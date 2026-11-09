@@ -1224,7 +1224,7 @@ fn update_notice_app() -> Lightforge {
     app.update_notice = Some(lightforge_core::update::Available {
         current: "1.0.0-beta.6".to_owned(),
         latest: "1.0.0-beta.7".to_owned(),
-        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+        url: lightforge_core::identity::RELEASES_PAGE.to_owned(),
     });
     app
 }
@@ -1267,7 +1267,7 @@ fn a_newer_release_is_offered_on_every_start_until_installed() {
     let found = lightforge_core::update::Available {
         current: "1.0.0-beta.9".to_owned(),
         latest: "1.0.0-beta.10".to_owned(),
-        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+        url: lightforge_core::identity::RELEASES_PAGE.to_owned(),
     };
     let (mut app, _scratch) = test_app();
     let _ = app.update(Message::UpdateChecked(Some(found.clone())));
@@ -1289,7 +1289,7 @@ fn the_check_button_shows_a_release_that_was_dismissed_before() {
     let found = lightforge_core::update::Available {
         current: "1.0.0-beta.6".to_owned(),
         latest: "1.0.0-beta.7".to_owned(),
-        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+        url: lightforge_core::identity::RELEASES_PAGE.to_owned(),
     };
     let _ = app.update(Message::UpdateChecked(Some(found.clone())));
     let _ = app.update(Message::DismissUpdate);
@@ -1305,7 +1305,7 @@ fn a_dismissed_release_stays_one_press_away_in_settings() {
     let found = lightforge_core::update::Available {
         current: "1.0.0-beta.7".to_owned(),
         latest: "1.0.0-beta.8".to_owned(),
-        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+        url: lightforge_core::identity::RELEASES_PAGE.to_owned(),
     };
     // Later: the notice closes for this session, the release stays known.
     let _ = app.update(Message::UpdateChecked(Some(found)));
@@ -1328,7 +1328,7 @@ fn update_now_on_a_checkout_shows_the_commands_instead() {
     app.newer_release = Some(lightforge_core::update::Available {
         current: "1.0.0-beta.7".to_owned(),
         latest: "1.0.0-beta.8".to_owned(),
-        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+        url: lightforge_core::identity::RELEASES_PAGE.to_owned(),
     });
 
     let _ = app.update(Message::UpdateNow);

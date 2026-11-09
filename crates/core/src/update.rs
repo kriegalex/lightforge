@@ -6,13 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::identity::{RELEASES_PAGE, RELEASES_URL};
 use crate::net::{ETagCache, Http, NetError};
-
-/// GitHub Releases endpoint for Lightforge itself.
-const RELEASES_URL: &str = "https://api.github.com/repos/LightforgeProject/lightforge/releases";
-
-/// Where to send someone who wants the new build.
-pub const RELEASES_PAGE: &str = "https://github.com/LightforgeProject/lightforge/releases";
 
 /// One published release, as much of it as this needs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

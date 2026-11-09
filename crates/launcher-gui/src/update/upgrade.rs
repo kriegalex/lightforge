@@ -55,7 +55,7 @@ impl Lightforge {
                     .update_notice
                     .as_ref()
                     .map(|a| a.url.clone())
-                    .unwrap_or_else(|| lightforge_core::update::RELEASES_PAGE.to_owned());
+                    .unwrap_or_else(|| lightforge_core::identity::RELEASES_PAGE.to_owned());
                 if let Err(e) = open::that_detached(&url) {
                     self.error = Some(format!("{url}: {e}").into());
                 }
