@@ -43,8 +43,8 @@ mod tests;
 
 pub use read::{countries, decode, read, Installed};
 pub use write::{
-    encode, graft, lift, register, splice, unregister, upsert, without, write, ProductInstall,
-    Record,
+    encode, graft, lift, register, register_missing, splice, unregister, upsert, without, write,
+    ProductInstall, Record,
 };
 
 use std::path::{Path, PathBuf};

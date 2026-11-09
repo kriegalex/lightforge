@@ -442,3 +442,73 @@ fn waiting_on_a_game_already_gone_returns_at_once() {
     game.wait().unwrap();
     wait_for_exit(pid).unwrap();
 }
+
+/// A WoW install adopted before Battle.net existed: the first quiet pass
+/// tells Agent about it, or an update of a sibling reclaims its files, and
+/// keeps Agent from updating it into the store by itself. So is a game Agent
+/// knows that Battle.net has no settings for, as after a pass whose config
+/// write failed. A game Battle.net installed has settings of its own, and
+/// they stand.
+#[test]
+fn a_quiet_pass_registers_the_games_battle_net_was_never_told_about() {
+    use crate::tact::productdb;
+
+    let dir = tempfile::tempdir().unwrap();
+    let layout = Layout::with_root(dir.path());
+    let install = layout.wow_install_in(&layout.libraries().all()[0]);
+    for flavor in ["_retail_", "_classic_era_", "_forever_"] {
+        std::fs::create_dir_all(install.join(flavor)).unwrap();
+    }
+    let forever = install.join("_forever_").join(".flavor.info");
+    std::fs::write(forever, "Product Flavor!STRING:0\nwowf\n").unwrap();
+    std::fs::write(
+        install.join(".build.info"),
+        "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|Version!STRING:0|Product!STRING:0\n\
+         eu|1|bc493ecb2898766c0f8947a99b4b3d65|12.1.5.70783|wow\n\
+         eu|1|3645f0fe9dc5215ea90eaf7cdb7379ce|1.15.9.69722|wow_classic_era\n\
+         eu|1|5ada954223f7c409ea172361f5c9e565|1.60.1.70862|wowf\n",
+    )
+    .unwrap();
+    // Its own components, the Classic Era it installed, and Forever: not Retail.
+    let agent_dir = layout.agent_dir();
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    let record = |product: &str, install_path: &str| productdb::ProductInstall {
+        product: product.into(),
+        install_path: install_path.into(),
+        region: "eu".into(),
+        locale: String::new(),
+        account_country: String::new(),
+        geo_country: String::new(),
+        flavor_dir: String::new(),
+        version: "2.41.2.9852".into(),
+        build_key: "26000534d51b737e111bd408814c836d".into(),
+        tags: String::new(),
+        key_ring: None,
+        installed_at_ms: 0,
+        family: String::new(),
+    };
+    let known = [
+        record("agent", "C:/ProgramData/Battle.net/Agent"),
+        record("wow_classic_era", crate::paths::WINDOWS_WOW_PATH),
+        record("wowf", crate::paths::WINDOWS_WOW_PATH),
+    ];
+    std::fs::write(agent_dir.join("product.db"), productdb::encode(&known)).unwrap();
+    let config = layout.battle_net_config("steamuser");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, r#"{"Games":{"wow_classic_era":{"AutoUpdate":"true"}}}"#).unwrap();
+
+    Preflight::new("steamuser").run(&runner(&layout), &layout, None, &mut NoDownloads).unwrap();
+
+    let registry = productdb::read(&agent_dir.join("product.db")).unwrap();
+    let products: Vec<_> = registry.iter().map(|r| r.product.as_str()).collect();
+    assert_eq!(products, ["agent", "wow_classic_era", "wowf", "wow"]);
+
+    // Not in the config's products, yet in a store Lightforge writes to: Agent
+    // may not update it behind Lightforge's back.
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(config["Games"]["wow"]["AutoUpdate"], "false");
+    assert_eq!(config["Games"]["wow"]["DownloadAllUpdates"], "false");
+    assert_eq!(config["Games"]["wowf"]["AutoUpdate"], "false");
+    assert_eq!(config["Games"]["wow_classic_era"], serde_json::json!({"AutoUpdate": "true"}));
+}
