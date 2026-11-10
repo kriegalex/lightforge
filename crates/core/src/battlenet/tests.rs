@@ -227,6 +227,44 @@ fn the_session_log_is_the_one_that_signed_in_not_the_second_invocation() {
 }
 
 #[test]
+fn a_client_its_updater_restarted_runs_without_the_gpu_switch() {
+    // An update applied at once restarts the client with only `--updatepid`,
+    // in a log of its own, without the switch every start Lightforge makes passes.
+    let dir = scratch("updater-restart");
+    let layout = Layout::with_root(&dir);
+    let logs = layout.battle_net_logs("steamuser");
+    std::fs::create_dir_all(&logs).unwrap();
+    let signed_in = format!("I [BNLogin] {SIGNED_IN}. |bnet=1:0:x\r\n");
+    std::fs::write(
+        logs.join("battle.net-20261109T212309.459039.log"),
+        format!(
+            "I 2026-11-09 21:23:09.462257 [Main] {{Main}} Command line arguments: \
+             {{[0]=--in-process-gpu, [1]=--from-launcher}}\r\n{signed_in}"
+        ),
+    )
+    .unwrap();
+    assert!(!SessionLog::find(&layout, "steamuser").unwrap().without_gpu_switch());
+
+    std::thread::sleep(Duration::from_millis(20));
+    let restarted = logs.join("battle.net-20261109T212438.988077.log");
+    std::fs::write(
+        &restarted,
+        format!(
+            "I 2026-11-09 21:24:38.990623 [Main] {{Main}} Command line arguments: \
+             {{[0]=--updatepid=332}}\r\n{signed_in}"
+        ),
+    )
+    .unwrap();
+    assert!(SessionLog::find(&layout, "steamuser").unwrap().without_gpu_switch());
+
+    // A log that says nothing about its command line gets no warning.
+    std::fs::write(&restarted, &signed_in).unwrap();
+    assert!(!SessionLog::find(&layout, "steamuser").unwrap().without_gpu_switch());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_launch_cut_off_before_the_exe_started_is_told_apart() {
     let dir = scratch("cut-off-launch");
     let layout = Layout::with_root(&dir);

@@ -336,7 +336,12 @@ white: in every start tested with the "Wayland backend" setting on
 proton-cachyos 11, and in about one start in sixteen on the default XWayland
 path. The cost is that a GPU crash takes the client with it, where Chromium
 would restart a separate GPU process. The switch doesn't reach the in-game
-shop, above.
+shop, above. Nor does it reach a client that restarts itself after updating
+(`applyUpdateNow=true`, as it did on a first start after a fresh install):
+that one runs as `Battle.net.exe --updatepid=<old pid>` and nothing else, and
+no setting was found that brings the switch back. A hand-off to such a client,
+once it has signed in, logs a warning; quitting it and starting it again from
+Lightforge restores the switch.
 
 For games outside the WoW family, Lightforge hands off to Battle.net, and the
 hard part is naming the game correctly. The client works in **game families**

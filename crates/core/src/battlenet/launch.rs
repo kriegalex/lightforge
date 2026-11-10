@@ -15,7 +15,7 @@ use crate::product::ProductCode;
 /// The cost: a GPU crash takes the client with it, where Chromium would
 /// restart a separate GPU process. `Battle.net Launcher.exe` passes it on,
 /// and the client runs as `Battle.net.exe --in-process-gpu --from-launcher`.
-const IN_PROCESS_GPU: &str = "--in-process-gpu";
+pub(super) const IN_PROCESS_GPU: &str = "--in-process-gpu";
 
 /// How to open Battle.net.
 #[derive(Debug, Clone, PartialEq, Eq)]
