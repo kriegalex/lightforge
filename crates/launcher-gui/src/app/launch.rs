@@ -58,7 +58,7 @@ impl Lightforge {
 
     /// Ask the process table whether the Battle.net client is up.
     pub(crate) fn check_client(&self) -> Task<Message> {
-        Task::perform(tasks::client_running(self.layout.clone()), Message::ClientSeen)
+        Task::perform(tasks::prefix_seen(self.layout.clone()), |(up, game)| Message::ClientSeen { up, game })
     }
 
     /// Ask the client's log about the selected game, for the button's word.
@@ -109,10 +109,22 @@ impl Lightforge {
         {
             return Task::none();
         }
+        // Agent would start over a store being written (GlitchTip #41), or
+        // beside a game starting under another build. The client poll brings
+        // it back after. A hand-off waiting on the client is what it is for.
+        let launch_without_client = self.in_play() && self.launch_after_client.is_none();
+        if self.store_writer().is_some() || launch_without_client {
+            tasks::owe_client();
+            return Task::none();
+        }
         self.client_phase = ClientPhase::SigningIn;
+        self.client_generation += 1;
+        let generation = self.client_generation;
+        let cancel = Cancel::new();
+        self.warming = Some(cancel.clone());
         Task::perform(
-            tasks::warm_battle_net(self.layout.clone(), self.config.prefix_user.clone()),
-            Message::BackgroundClient,
+            tasks::warm_battle_net(self.layout.clone(), self.config.prefix_user.clone(), tasks::preflights(), cancel),
+            move |result| Message::BackgroundClient(generation, result),
         )
     }
 
@@ -129,6 +141,7 @@ impl Lightforge {
             && self.client_phase == ClientPhase::Settled
             && !self.busy
             && !self.quitting_client
+            && self.client_update.is_none()
             && !self.in_play()
             && self.store_writer().is_none()
             && !removing_textures
@@ -136,7 +149,15 @@ impl Lightforge {
 
     /// The setting was switched off: a client nobody is using goes with it.
     pub(crate) fn close_background_client(&mut self) -> Task<Message> {
-        if self.busy || self.quitting_client {
+        if let Some(warming) = self.warming.take() {
+            warming.cancel();
+        }
+        // The launch may be the one starting the client; after it, then.
+        if self.busy {
+            self.close_client_after_play = true;
+            return Task::none();
+        }
+        if self.quitting_client {
             return Task::none();
         }
         self.quitting_client = true;
@@ -177,8 +198,13 @@ impl Lightforge {
                 self.queue[at].stage = Stage::Queued;
             }
         }
+        let close_client = match std::mem::take(&mut self.close_client_after_play) {
+            true if !self.config.battle_net_in_background => self.close_background_client(),
+            _ => Task::none(),
+        };
         // The session may have filled the catalogue cache; 25 ms to re-read.
         Task::batch([
+            close_client,
             self.pump(),
             self.check_client(),
             self.reload(self.selected.code.clone()),
@@ -198,17 +224,24 @@ impl Lightforge {
         ])
     }
 
-    /// Clear the way for a launch, then let [`Message::PreflightDone`] start it.
+    /// Clear the way for a launch of the selected game, then let
+    /// [`Message::PreflightDone`] start it.
     pub(crate) fn preflight(&mut self, what: Launch) -> Task<Message> {
+        self.client_update_retries = 0;
+        self.preflight_for(what, self.selected.code.clone())
+    }
+
+    /// [`Self::preflight`] for a launch that waited, under the game it was for.
+    pub(crate) fn preflight_for(&mut self, what: Launch, code: ProductCode) -> Task<Message> {
         // An older Proton than the prefix's is allowed, but not silently.
-        if let Some(dialog) = self.downgrade_ahead(what) {
+        if let Some(dialog) = self.downgrade_ahead(what, &code) {
             self.downgrade_dialog = Some(dialog);
             return Task::none();
         }
         // Here too: pre-flight relinks, and relinking a missing library
         // leaves an empty install.
         if !matches!(what, Launch::Client) {
-            if let Some(drive) = self.offline_drive(&self.selected.code) {
+            if let Some(drive) = self.offline_drive(&code) {
                 self.error = Some(format!("{drive} is not mounted").into());
                 return Task::none();
             }
@@ -223,19 +256,19 @@ impl Lightforge {
         self.busy = true;
         self.error = None;
         self.status = "pre-flight…".to_owned();
-        self.launching = Some(self.selected.code.clone());
+        self.launching = Some(code.clone());
 
         // Wait for an addon pass extracting into what the client reads.
         if self.addon_auto_running && !matches!(what, Launch::Client) {
             self.status = "finishing addon updates…".to_owned();
-            self.launch_after_addons = Some(what);
+            self.launch_after_addons = Some((what, code));
             return Task::none();
         }
 
         // The client drops commands until it has signed in.
         if self.client_phase == ClientPhase::SigningIn && what != Launch::Game {
             self.status = "Battle.net is signing in…".to_owned();
-            self.launch_after_client = Some(what);
+            self.launch_after_client = Some((what, code));
             return Task::none();
         }
 
@@ -255,7 +288,7 @@ impl Lightforge {
         Task::perform(
             tasks::preflight(
                 self.layout.clone(),
-                self.selected.code.clone(),
+                code,
                 self.downloads.clone(),
                 // Cleared under whichever build is about to run in the prefix.
                 Self::runs_for(what),
@@ -329,12 +362,11 @@ impl Lightforge {
     /// The warning this launch owes the user, or `None` to go ahead.
     ///
     /// `None` unless this would be an unagreed downgrade.
-    pub(crate) fn downgrade_ahead(&self, what: Launch) -> Option<DowngradeDialog> {
+    pub(crate) fn downgrade_ahead(&self, what: Launch, code: &ProductCode) -> Option<DowngradeDialog> {
         use lightforge_core::proton::PrefixFit;
 
         let runs = Self::runs_for(what);
-        let code = self.selected.code.clone();
-        let (pick, fit) = tasks::prefix_fit(&self.layout, &code, runs);
+        let (pick, fit) = tasks::prefix_fit(&self.layout, code, runs);
         let (pick, built_by) = match (pick, fit) {
             (Some(pick), PrefixFit::Older { built_by }) => (pick, built_by),
             _ => return None,
@@ -344,9 +376,10 @@ impl Lightforge {
         }
         Some(DowngradeDialog {
             what,
+            code: code.clone(),
             pick,
             built_by,
-            label: self.label_of(&code),
+            label: self.label_of(code),
         })
     }
 

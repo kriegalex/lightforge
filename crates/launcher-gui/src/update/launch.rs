@@ -157,9 +157,22 @@ impl Lightforge {
                     // Nothing went wrong that the user could act on: start it
                     // again and send the same launch. The button stays held.
                     Ok(tasks::Handoff::ClientUpdated) if self.config.battle_net_in_background => {
+                        if self.client_update_retries >= 2 {
+                            return Ok(self.launch_failed("Battle.net keeps restarting — open it to finish its update"));
+                        }
+                        self.client_update_retries += 1;
                         self.status = "Battle.net updated itself, starting it again…".to_owned();
-                        self.launch_after_client = Some(Launch::BattleNet);
-                        self.warm_client()
+                        let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
+                        self.launch_after_client = Some((Launch::BattleNet, code.clone()));
+                        let warm = self.warm_client();
+                        // Nothing to wait for: the hand-off starts the client itself.
+                        match self.client_phase == ClientPhase::SigningIn {
+                            true => warm,
+                            false => {
+                                self.launch_after_client = None;
+                                self.preflight_for(Launch::BattleNet, code)
+                            }
+                        }
                     }
                     Ok(tasks::Handoff::ClientUpdated) => {
                         self.launch_failed("Battle.net updated itself — press Play again")
@@ -179,8 +192,11 @@ impl Lightforge {
                             (Kind::HandOff, true) => {
                                 self.busy = false;
                                 self.launching = None;
+                                let update = self.start_client_update(code.clone());
+                                let resumed = self.after_play(code);
+                                // After `after_play`, whose reload says "checking…".
                                 self.status = "updating in Battle.net…".to_owned();
-                                self.start_client_update(code)
+                                Task::batch([update, resumed])
                             }
                         }
                     }
@@ -251,7 +267,7 @@ impl Lightforge {
         Ok(match message {
             Message::ClientWatch => self.check_client(),
 
-            Message::ClientSeen(up) => {
+            Message::ClientSeen { up, game } => {
                 let vanished = self.client_up && !up;
                 self.client_up = up;
                 if !up {
@@ -264,7 +280,7 @@ impl Lightforge {
                 if !up {
                     self.update_pending = None;
                 }
-                if self.client_may_return() && tasks::take_client_owed() {
+                if !game && self.client_may_return() && tasks::take_client_owed() {
                     return Ok(self.warm_client());
                 }
                 // Not during a launch, which reads the same log itself.
@@ -316,7 +332,11 @@ impl Lightforge {
                 }
             }
 
-            Message::BackgroundClient(result) => {
+            // Overtaken by a newer warm-up, which answers for the client now.
+            Message::BackgroundClient(generation, _) if generation != self.client_generation => Task::none(),
+
+            Message::BackgroundClient(generation, result) => {
+                self.warming = None;
                 let waiting = self.launch_after_client.take();
                 match result {
                     Ok(tasks::Warmed::NeedsSignIn { started }) => {
@@ -325,7 +345,7 @@ impl Lightforge {
                         let watch = match self.client_phase == ClientPhase::SigningIn {
                             true => Task::perform(
                                 tasks::await_sign_in(self.layout.clone(), self.config.prefix_user.clone(), started),
-                                Message::BackgroundClient,
+                                move |result| Message::BackgroundClient(generation, result),
                             ),
                             false => Task::none(),
                         };
@@ -341,7 +361,7 @@ impl Lightforge {
                             tracing::warn!("Battle.net did not start in the background: {e}");
                         }
                         self.client_phase = ClientPhase::Settled;
-                        let launch = waiting.map_or_else(Task::none, |what| self.preflight(what));
+                        let launch = waiting.map_or_else(Task::none, |(what, code)| self.preflight_for(what, code));
                         Task::batch([launch, self.check_client()])
                     }
                 }
@@ -461,7 +481,7 @@ impl Lightforge {
                 // Remembered before the launch, so the retry below walks
                 // straight past the guard it just answered.
                 self.downgrade_ok.insert(dialog.pick);
-                self.preflight(dialog.what)
+                self.preflight_for(dialog.what, dialog.code)
             }
             other => return Err(other),
         })

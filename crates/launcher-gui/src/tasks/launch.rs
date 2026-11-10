@@ -22,6 +22,8 @@ pub async fn preflight(
             .unwrap_or_default();
         let started = Instant::now();
         tracing::info!("preflight for {} ({runs:?})", code.as_str());
+        let _prefix = hold_prefix();
+        PREFLIGHTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let report = Preflight::new(config.prefix_user.clone())
             .with_managed(config.managed_products())
             .keeping_client(config.keeps_battle_net(runs == Runs::Game))
@@ -72,6 +74,15 @@ pub(crate) const GAME_APPEAR_WITHIN: Duration = Duration::from_secs(180);
 /// A new game not yet in the process table looks like an empty prefix, and
 /// winding down then would kill it.
 pub(crate) static LAUNCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Counts launch pre-flights. A warm-up that finds one ran since it was asked
+/// stands down: that launch spawns after the lock is released, and the client
+/// may be under another build.
+static PREFLIGHTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn preflights() -> u64 {
+    PREFLIGHTS.load(std::sync::atomic::Ordering::SeqCst)
+}
 
 /// How often the prefix is re-scanned while waiting for the game (60 ms a scan).
 pub(crate) const WATCH_POLL: Duration = Duration::from_millis(500);
@@ -126,6 +137,7 @@ pub async fn start_game(layout: Layout, code: ProductCode) -> Result<Started, Pr
             &tweaks.wrappers(&tools),
         );
 
+        let prefix = hold_prefix();
         let generation =
             LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
 
@@ -136,6 +148,7 @@ pub async fn start_game(layout: Layout, code: ProductCode) -> Result<Started, Pr
         // by hand with.
         tracing::info!("launching {}: {launch:?}", code.as_str());
         let mut child = launch.spawn().map_err(|e| Problem::of(&e))?;
+        drop(prefix);
         crate::trace::mark(format!("launch: spawned {}", exe.display()));
         let session = Instant::now();
 
@@ -310,16 +323,23 @@ pub async fn launch_via_battle_net(
 
         // Two phases: a cold client ignores `--exec=launch` (measured: signed
         // in at 5 s, game at 53 s). A second invocation hands it over IPC.
-        if !preflight::client_running(&layout) {
-            // Minimized only where it signs itself in.
-            let minimize = minimized && battlenet::signs_in_by_itself(&layout, &user);
-            let started = start_client(&runner, &layout, &user, minimize)?;
-
-            if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT)
-                == Readiness::NeedsAttention
-            {
+        let cold = {
+            let _prefix = hold_prefix();
+            match preflight::client_running(&layout) {
+                true => None,
+                false => {
+                    // Minimized only where it signs itself in.
+                    let minimize = minimized && battlenet::signs_in_by_itself(&layout, &user);
+                    Some((start_client(&runner, &layout, &user, minimize)?, minimize))
+                }
+            }
+        };
+        if let Some((started, minimize)) = cold {
+            match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT, || preflight::client_running(&layout)) {
+                Readiness::SignedIn => {}
                 // Left to the user, who is told where the client is.
-                return Ok(Handoff::NeedsAttention { minimized: minimize });
+                Readiness::NeedsAttention => return Ok(Handoff::NeedsAttention { minimized: minimize }),
+                Readiness::Exited => return Ok(Handoff::ClientClosed),
             }
         }
 
@@ -353,7 +373,7 @@ pub async fn launch_via_battle_net(
         // quits the client in the middle of the launch (GlitchTip #43).
         let closes_to_tray = battlenet::closes_to_tray(&layout, &user);
         let tray = match closes_to_tray.then(|| battlenet::ClientWindows::connect(preflight::client_pids(&layout))) {
-            Some(Ok(windows)) if windows.any_shown().is_ok_and(|shown| !shown) => Some(windows),
+            Some(Ok(windows)) if windows.any_open().is_ok_and(|open| !open) => Some(windows),
             Some(Ok(_)) | None => None,
             Some(Err(e)) => {
                 tracing::info!("Battle.net's window stays as the client leaves it: {}", chain(&e));
@@ -363,7 +383,14 @@ pub async fn launch_via_battle_net(
 
         // Over IPC to the running client, with the family the panel resolved.
         let launch = Launch::Product { code: code.clone(), exec: family };
+        // Again, held: the waits above take up to 15 s, long enough for a
+        // download to close the client.
+        let prefix = hold_prefix();
+        if !preflight::client_running(&layout) {
+            return Ok(Handoff::ClientClosed);
+        }
         reap_later(battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?);
+        drop(prefix);
         if let Some(windows) = tray {
             std::thread::spawn(move || match windows.keep_closed(Instant::now() + KEEP_IN_TRAY) {
                 Ok(0) => {}
@@ -536,11 +563,11 @@ pub async fn stop_game(layout: Layout, game: GameProcess) -> Result<String, Prob
     }
 }
 
-/// Whether the Battle.net client is up in the prefix.
-pub async fn client_running(layout: Layout) -> bool {
-    tokio::task::spawn_blocking(move || lightforge_core::preflight::client_running(&layout))
+/// Whether the Battle.net client is up in the prefix, and whether a game is.
+pub async fn prefix_seen(layout: Layout) -> (bool, bool) {
+    tokio::task::spawn_blocking(move || lightforge_core::preflight::client_and_games(&layout))
         .await
-        .unwrap_or(false)
+        .unwrap_or((false, false))
 }
 
 /// The games running in the prefix, by name, whoever started them.
