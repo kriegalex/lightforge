@@ -90,9 +90,10 @@ Before an install or update, the Play panel lists what's included:
 *"includes optional content: …"*. The texture pack is a checkbox in the
 install dialog, with its size next to it, and afterwards a switch called
 **High-resolution textures** in **Game Settings › Graphics** (the cog next to
-PLAY). It's off unless you turn it on, which is also Battle.net's default.
-Turning it on starts the download; turning it off asks whether to delete the
-texture files as well.
+PLAY). It's off unless you turn it on. Battle.net doesn't offer the pack: its
+Modify Installation for Forever lists languages only, and an update of the
+game from Battle.net deletes the textures. Turning the switch on starts the
+download; turning it off asks whether to delete the texture files as well.
 
 ### The download is slower than my connection
 

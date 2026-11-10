@@ -180,15 +180,22 @@ impl Lightforge {
                 settings.textures,
                 TexturesStep::Planning | TexturesStep::Removing
             );
+            // Battle.net's update of Forever reclaimed the whole 37 GiB pack:
+            // its query for that update had no HighRes.
             let about = match (&settings.textures, on) {
                 (TexturesStep::Planning, _) => "Working out what can be deleted…".to_owned(),
                 (TexturesStep::Removing, _) => {
                     "Deleting the textures. This rewrites game archives and takes a minute."
                         .to_owned()
                 }
-                (_, true) => format!("Downloaded and kept up to date, {}.", size_of(bytes)),
+                (_, true) => format!(
+                    "Downloaded and kept up to date, {}. Only Lightforge keeps them: an \
+                     update from Battle.net deletes them.",
+                    size_of(bytes)
+                ),
                 (_, false) => format!(
-                    "Sharper textures, {}. Switching on starts the download.",
+                    "Sharper textures, {}. Switching on starts the download. Only Lightforge \
+                     keeps them: an update from Battle.net deletes them.",
                     size_of(bytes)
                 ),
             };

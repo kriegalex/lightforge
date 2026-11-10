@@ -49,18 +49,28 @@ impl Lightforge {
                 if let Some(extra) = extra {
                     body = body.push(field_row(
                         "Optional".to_owned(),
-                        row![
-                            clickable(
-                                "high res",
-                                tick(dialog.high_res)
-                                    .label(optional_label(HIGH_RES))
-                                    .on_toggle(Message::InstallHighRes)
-                                    .text_size(theme::tap_text(theme::BODY)),
+                        column![
+                            row![
+                                clickable(
+                                    "high res",
+                                    tick(dialog.high_res)
+                                        .label(optional_label(HIGH_RES))
+                                        .on_toggle(Message::InstallHighRes)
+                                        .text_size(theme::tap_text(theme::BODY)),
+                                ),
+                                muted(format!("+{}", size_of(extra)), theme::LABEL),
+                            ]
+                            .spacing(theme::SM)
+                            .align_y(Alignment::Center),
+                            // Battle.net's update of Forever reclaimed the
+                            // whole pack: its query had no HighRes.
+                            muted(
+                                "Only Lightforge keeps them: an update from Battle.net deletes them."
+                                    .to_owned(),
+                                theme::LABEL,
                             ),
-                            muted(format!("+{}", size_of(extra)), theme::LABEL),
                         ]
-                        .spacing(theme::SM)
-                        .align_y(Alignment::Center)
+                        .spacing(theme::XS)
                         .into(),
                     ));
                 }
