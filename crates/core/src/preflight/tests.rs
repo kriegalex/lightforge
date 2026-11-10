@@ -443,18 +443,65 @@ fn waiting_on_a_game_already_gone_returns_at_once() {
     wait_for_exit(pid).unwrap();
 }
 
-/// A WoW install adopted before Battle.net existed: the first quiet pass
-/// tells Agent about it, or an update of a sibling reclaims its files, and
-/// keeps Agent from updating it into the store by itself. So is a game Agent
-/// knows that Battle.net has no settings for, as after a pass whose config
-/// write failed. A game Battle.net installed has settings of its own, and
-/// they stand.
+/// The first quiet pass tells Agent about every game in the install, or an
+/// update of a sibling reclaims their files. It also keeps Agent from
+/// updating by itself the games Battle.net has no settings for: Retail, which
+/// Agent never heard of, and Forever, which it knows, as after a pass whose
+/// config write failed. Classic Era, which Battle.net installed, keeps its own.
 #[test]
 fn a_quiet_pass_registers_the_games_battle_net_was_never_told_about() {
-    use crate::tact::productdb;
-
     let dir = tempfile::tempdir().unwrap();
     let layout = Layout::with_root(dir.path());
+    let config = half_registered_store(&layout);
+
+    Preflight::new("steamuser").run(&runner(&layout), &layout, None, &mut NoDownloads).unwrap();
+
+    let registry = crate::tact::productdb::read(&layout.agent_dir().join("product.db")).unwrap();
+    let products: Vec<_> = registry.iter().map(|r| r.product.as_str()).collect();
+    assert_eq!(products, ["agent", "wow_classic_era", "wowf", "wow"]);
+
+    // Not in the config's products, yet in a store Lightforge writes to: Agent
+    // may not update it behind Lightforge's back.
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(config["Games"]["wow"]["AutoUpdate"], "false");
+    assert_eq!(config["Games"]["wow"]["DownloadAllUpdates"], "false");
+    assert_eq!(config["Games"]["wowf"]["AutoUpdate"], "false");
+    assert_eq!(config["Games"]["wow_classic_era"], serde_json::json!({"AutoUpdate": "true"}));
+}
+
+/// The background mode puts back the settings it overwrote when it goes.
+/// Retail had none: the switch-off is Lightforge's, and Agent's default must
+/// not come back with the mode. Classic Era's own setting does.
+#[test]
+fn the_shared_store_switch_off_outlasts_the_background_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = Layout::with_root(dir.path());
+    let config = half_registered_store(&layout);
+
+    // On twice, as the warm-up runs: the second pass finds Retail in the
+    // config and notes Lightforge's own value.
+    for background in [true, true, false] {
+        Preflight::new("steamuser")
+            .with_background_client(background)
+            .run(&runner(&layout), &layout, None, &mut NoDownloads)
+            .unwrap();
+    }
+
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(config["Games"]["wow"]["AutoUpdate"], "false");
+    assert_eq!(config["Games"]["wow"]["DownloadAllUpdates"], "false");
+    assert_eq!(config["Games"]["wow_classic_era"]["AutoUpdate"], "true");
+}
+
+/// A WoW install with Retail, Classic Era and Forever, adopted before
+/// Battle.net existed: Agent knows its own components, the Classic Era it
+/// installed, and Forever, not Retail. Battle.net has settings for Classic
+/// Era only. Returns `Battle.net.config`.
+fn half_registered_store(layout: &Layout) -> std::path::PathBuf {
+    use crate::tact::productdb;
+
     let install = layout.wow_install_in(&layout.libraries().all()[0]);
     for flavor in ["_retail_", "_classic_era_", "_forever_"] {
         std::fs::create_dir_all(install.join(flavor)).unwrap();
@@ -496,19 +543,5 @@ fn a_quiet_pass_registers_the_games_battle_net_was_never_told_about() {
     let config = layout.battle_net_config("steamuser");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     std::fs::write(&config, r#"{"Games":{"wow_classic_era":{"AutoUpdate":"true"}}}"#).unwrap();
-
-    Preflight::new("steamuser").run(&runner(&layout), &layout, None, &mut NoDownloads).unwrap();
-
-    let registry = productdb::read(&agent_dir.join("product.db")).unwrap();
-    let products: Vec<_> = registry.iter().map(|r| r.product.as_str()).collect();
-    assert_eq!(products, ["agent", "wow_classic_era", "wowf", "wow"]);
-
-    // Not in the config's products, yet in a store Lightforge writes to: Agent
-    // may not update it behind Lightforge's back.
-    let config: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
-    assert_eq!(config["Games"]["wow"]["AutoUpdate"], "false");
-    assert_eq!(config["Games"]["wow"]["DownloadAllUpdates"], "false");
-    assert_eq!(config["Games"]["wowf"]["AutoUpdate"], "false");
-    assert_eq!(config["Games"]["wow_classic_era"], serde_json::json!({"AutoUpdate": "true"}));
+    config
 }

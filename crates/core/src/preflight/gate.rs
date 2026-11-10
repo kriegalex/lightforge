@@ -152,18 +152,6 @@ impl Preflight {
         // prefix update, without `HideOnClose`, so it is re-applied every launch.
         let mut tweaks = battlenet::default_tweaks(layout, self.background);
         tweaks.extend(battlenet::product_tweaks(&self.managed));
-        // And the other games in those installs Battle.net has no settings
-        // for: Agent would update them by itself, into a store Lightforge
-        // downloads into. A game it installed has its own, and so does one the
-        // user turned back on; those stand, outside background mode below.
-        let configured = battlenet::known_product_codes(layout, &self.user);
-        let unconfigured: Vec<ProductCode> = installed
-            .iter()
-            .filter(|record| !configured.contains(&record.product))
-            .map(|record| ProductCode::from(record.product.clone()))
-            .filter(|code| !self.managed.contains(code))
-            .collect();
-        tweaks.extend(battlenet::product_tweaks(&unconfigured));
         // A client that stays up must not start downloads nobody asked for.
         // Here because it rewrites the file on exit, undoing what an update
         // asked for: only a closed client can be told.
@@ -181,6 +169,20 @@ impl Preflight {
                 battlenet::restore_overrides(layout, &self.user)?;
             }
         }
+        // And the other games in those installs Battle.net has no settings
+        // for: Agent would update them by itself, into a store Lightforge
+        // downloads into. A game it installed has its own, and so does one the
+        // user turned back on; those stand, outside background mode above.
+        // After the record: an absent key is no choice of the user's, and
+        // putting it back would hand the game to Agent again.
+        let configured = battlenet::known_product_codes(layout, &self.user);
+        let unconfigured: Vec<ProductCode> = installed
+            .iter()
+            .filter(|record| !configured.contains(&record.product))
+            .map(|record| ProductCode::from(record.product.clone()))
+            .filter(|code| !self.managed.contains(code))
+            .collect();
+        tweaks.extend(battlenet::product_tweaks(&unconfigured));
         let mut configs = vec![battlenet::configure(layout, &self.user, &tweaks)?];
         configs.extend(battlenet::configure_accounts(layout, &self.user, &account)?);
 
