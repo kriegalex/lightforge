@@ -125,6 +125,10 @@ pub(super) const LAUNCHING: &str = "[GameLaunchController] {Main} LaunchBinary: 
 /// after [`LAUNCHING`] (wowf, 2026-11-05 to 11-08).
 pub(super) const LAUNCHED: &str = "[InstallManager] {Main} Launched ";
 
+/// The line near the top of a client's log with its own command line, e.g.
+/// `Command line arguments: {[0]=--in-process-gpu, [1]=--from-launcher}`.
+pub(super) const COMMAND_LINE: &str = "Command line arguments: {";
+
 /// What the client logs when it has updated itself. It then quits on the next
 /// command it gets, to switch to the new version, and does not come back
 /// (build 17952 to 17986, 2026-11-04).
@@ -250,6 +254,20 @@ impl SessionLog {
     /// Whether the client updated itself during this session.
     pub fn updated_itself(&self) -> bool {
         std::fs::read_to_string(&self.path).is_ok_and(|text| text.contains(SELF_UPDATED))
+    }
+
+    /// Whether this session's client runs without `--in-process-gpu`, so its
+    /// window can stay white. Every start Lightforge makes passes it; a client
+    /// that applies an update at once (`applyUpdateNow=true`) restarts itself
+    /// as `Battle.net.exe --updatepid=<old pid>` and nothing else (2.53.8,
+    /// measured 2026-11-09). `false` for a log it cannot read or that holds
+    /// no command line: no warning beats a wrong one.
+    pub fn without_gpu_switch(&self) -> bool {
+        std::fs::read_to_string(&self.path).is_ok_and(|text| {
+            text.lines()
+                .find(|line| line.contains(COMMAND_LINE))
+                .is_some_and(|line| !line.contains(super::launch::IN_PROCESS_GPU))
+        })
     }
 
     /// Whether the client is holding `uid` back for an update.

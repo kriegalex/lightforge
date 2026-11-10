@@ -332,6 +332,12 @@ pub async fn launch_via_battle_net(
         // seconds, and a launch then only selects its tile.
         let session = battlenet::SessionLog::find(&layout, &user);
         if let Some(log) = &session {
+            if log.without_gpu_switch() {
+                tracing::warn!(
+                    "Battle.net runs without --in-process-gpu (restarted by its updater, or not \
+                     started by Lightforge): a white window would come from this"
+                );
+            }
             if log.pending_update(&install_uid) {
                 tracing::info!("Battle.net holds {install_uid} back for an update; not sending the launch");
                 return Ok(Handoff::NeedsUpdate);
