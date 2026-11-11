@@ -227,19 +227,22 @@ impl Lightforge {
             }
 
             Message::PreflightDone(what, result) => {
-                if let Err(e) = result {
-                    self.busy = false;
-                    self.launching = None;
-                    self.error = Some(e);
-                    return Ok(self.pump());
-                }
+                let cleared = match result {
+                    Ok(cleared) => cleared,
+                    Err(e) => {
+                        self.busy = false;
+                        self.launching = None;
+                        self.error = Some(e);
+                        return Ok(self.pump());
+                    }
+                };
                 // Paused runs still checkpoint; the client must not open the store yet.
                 if self.launch_must_wait() {
-                    self.launch_when_quiet = Some(what);
+                    self.launch_when_quiet = Some((what, cleared));
                     self.status = "pre-flight… waiting for the download to pause".to_owned();
                     return Ok(Task::none());
                 }
-                self.start_launch(what)
+                self.start_launch(what, cleared)
             }
 
             Message::ManageSubscription => {
@@ -280,7 +283,8 @@ impl Lightforge {
                 if !up {
                     self.update_pending = None;
                 }
-                if !game && self.client_may_return() && tasks::take_client_owed() {
+                // `|`, not `||`: both are taken, or one answers again next poll.
+                if !game && self.client_may_return() && (tasks::take_client_owed() | self.take_cli_owed()) {
                     return Ok(self.warm_client());
                 }
                 // Not during a launch, which reads the same log itself.
@@ -381,6 +385,7 @@ impl Lightforge {
                         self.layout.clone(),
                         self.selected.code.clone(),
                         self.config.prefix_user.clone(),
+                        None,
                     ),
                     Message::BattleNetShown,
                 )

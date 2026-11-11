@@ -5,38 +5,22 @@ use super::*;
 /// Everything that must be settled before a launch: no stale processes in the
 /// prefix, no transfer mid-flight.
 ///
-/// Split from the launch: seconds against a whole session.
+/// Split from the launch: seconds against a whole session. The spawn hands
+/// the returned [`Cleared`] to [`hold_for_spawn`].
 pub async fn preflight(
     layout: Layout,
     code: ProductCode,
     downloads: SharedDownloads,
     runs: Runs,
-) -> Result<(), Problem> {
+) -> Result<Cleared, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         // The launch's own build, or the shared prefix gets upgraded in between.
         let runner = runner_for(&layout, &code, runs)?;
         let mut guard = downloads;
-        let config = AppDirs::discover()
-            .ok()
-            .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-            .unwrap_or_default();
         let started = Instant::now();
         tracing::info!("preflight for {} ({runs:?})", code.as_str());
-        let _prefix = hold_prefix();
-        PREFLIGHTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let report = Preflight::new(config.prefix_user.clone())
-            .with_managed(config.managed_products())
-            .keeping_client(config.keeps_battle_net(runs == Runs::Game))
-            .with_background_client(config.battle_net_in_background)
-            .run(&runner, &layout, Some(&code), &mut guard)
-            .map_err(|e| Problem::of(&e))?;
-        // Closed for a game under another build: it comes back after.
-        if runs == Runs::Game
-            && config.battle_net_in_background
-            && report.processes.iter().any(|o| o.process.kind == lightforge_core::preflight::ProcKind::BattleNet)
-        {
-            owe_client();
-        }
+        let prefix = hold_prefix();
+        let report = clear(&runner, &layout, &code, runs, &mut guard)?;
         // The stage timings say where a launch that feels stuck sits.
         tracing::info!(
             "preflight done in {} ms, {} process(es) found: {}",
@@ -56,10 +40,56 @@ pub async fn preflight(
                 timing.stage
             ));
         }
-        Ok(())
+        Ok(prefix.cleared())
     })
     .await
     .map_err(|e| Problem::of(&e))?
+}
+
+/// Pre-flight's sweep, run with the prefix held.
+fn clear(
+    runner: &lightforge_core::prefix::ProtonRunner,
+    layout: &Layout,
+    code: &ProductCode,
+    runs: Runs,
+    downloads: &mut SharedDownloads,
+) -> Result<lightforge_core::preflight::Report, Problem> {
+    let config = AppDirs::discover()
+        .ok()
+        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
+        .unwrap_or_default();
+    prefix().preflights.fetch_add(1, Ordering::SeqCst);
+    let report = Preflight::new(config.prefix_user.clone())
+        .with_managed(config.managed_products())
+        .keeping_client(config.keeps_battle_net(runs == Runs::Game))
+        .with_background_client(config.battle_net_in_background)
+        .run(runner, layout, Some(code), downloads)
+        .map_err(|e| Problem::of(&e))?;
+    // Closed for a game under another build: it comes back after.
+    if runs == Runs::Game
+        && config.battle_net_in_background
+        && report.processes.iter().any(|o| o.process.kind == lightforge_core::preflight::ProcKind::BattleNet)
+    {
+        owe_client();
+    }
+    Ok(report)
+}
+
+/// Hold the prefix for the spawn `cleared` was for, with the downloads its
+/// pre-flight paused. Anyone who held it since may have started or stopped
+/// something there, so the sweep runs again.
+fn hold_for_spawn(
+    layout: &Layout,
+    code: &ProductCode,
+    runs: Runs,
+    (cleared, mut downloads): (Cleared, SharedDownloads),
+) -> Result<std::sync::MutexGuard<'static, PrefixState>, Problem> {
+    let prefix = hold_prefix();
+    if !prefix.follows(cleared) {
+        tracing::info!("the prefix was used after pre-flight for {}; clearing it again", code.as_str());
+        clear(&runner_for(layout, code, runs)?, layout, code, runs, &mut downloads)?;
+    }
+    Ok(prefix)
 }
 
 /// How long the game itself gets to appear in the prefix before the watch
@@ -67,22 +97,6 @@ pub async fn preflight(
 ///
 /// Generous: a cold start on a hard drive compiling pipelines still counts.
 pub(crate) const GAME_APPEAR_WITHIN: Duration = Duration::from_secs(180);
-
-/// Counts launches, so a wind-down from a finished session can tell whether a
-/// newer one has started since.
-///
-/// A new game not yet in the process table looks like an empty prefix, and
-/// winding down then would kill it.
-pub(crate) static LAUNCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// Counts launch pre-flights. A warm-up that finds one ran since it was asked
-/// stands down: that launch spawns after the lock is released, and the client
-/// may be under another build.
-static PREFLIGHTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-pub(crate) fn preflights() -> u64 {
-    PREFLIGHTS.load(std::sync::atomic::Ordering::SeqCst)
-}
 
 /// How often the prefix is re-scanned while waiting for the game (60 ms a scan).
 pub(crate) const WATCH_POLL: Duration = Duration::from_millis(500);
@@ -107,7 +121,7 @@ pub(crate) fn back_up_before_launch(layout: &Layout, code: &ProductCode) {
 #[derive(Debug, Clone)]
 pub enum Started {
     /// The game is up; [`await_game_exit`] watches the rest of its session.
-    /// `generation` is this launch's count in [`LAUNCHES`].
+    /// `generation` is this launch's count in [`PrefixState::launches`].
     Up { game: GameProcess, generation: u64 },
     /// It ended before it was ever seen, with this to say.
     Over(String),
@@ -117,8 +131,12 @@ pub enum Started {
 ///
 /// The exe is watched by name: the game is not reliably a descendant of the
 /// Proton child. If it never appears, the child's exit status is reported.
-pub async fn start_game(layout: Layout, code: ProductCode) -> Result<Started, Problem> {
-    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+pub async fn start_game(
+    layout: Layout,
+    code: ProductCode,
+    cleared: (Cleared, SharedDownloads),
+) -> Result<Started, Problem> {
+    off_runtime("game-start", move || -> Result<_, Problem> {
         // The native path, not the `C:` symlink, so Wine puts the game on its
         // own drive ([`Layout::wow_drive`]) and the shop's browser keeps its
         // GPU child. Verified 2026-10-02, a full checkout.
@@ -137,9 +155,9 @@ pub async fn start_game(layout: Layout, code: ProductCode) -> Result<Started, Pr
             &tweaks.wrappers(&tools),
         );
 
-        let prefix = hold_prefix();
-        let generation =
-            LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let mut prefix = hold_for_spawn(&layout, &code, Runs::Game, cleared)?;
+        prefix.launches += 1;
+        let generation = prefix.launches;
 
         // What the prefix held before the click, so a session already running
         // under another launcher is not mistaken for this one's.
@@ -182,8 +200,7 @@ pub async fn start_game(layout: Layout, code: ProductCode) -> Result<Started, Pr
             }
         }
     })
-    .await
-    .map_err(|e| Problem::of(&e))?
+    .await?
 }
 
 /// What [`watch_for`] saw.
@@ -235,8 +252,9 @@ pub(crate) fn settle(
 ) {
     use lightforge_core::preflight;
 
+    let prefix = hold_prefix();
     // A newer launch owns the prefix; by counter, since a scan cannot see it yet.
-    if LAUNCHES.load(std::sync::atomic::Ordering::SeqCst) != generation {
+    if prefix.launches != generation {
         crate::trace::mark("launch: a newer session owns the prefix, leaving it alone");
         return;
     }
@@ -305,8 +323,9 @@ pub async fn launch_via_battle_net(
     family: Option<String>,
     install_uid: String,
     minimized: bool,
+    cleared: (Cleared, SharedDownloads),
 ) -> Result<Handoff, Problem> {
-    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+    off_runtime("hand-off", move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch, Readiness};
         use lightforge_core::preflight;
 
@@ -314,25 +333,24 @@ pub async fn launch_via_battle_net(
         let runner = client_runner(&layout, &code)?;
         back_up_before_launch(&layout, &code);
 
-        // Counted, so a pending wind-down leaves this launch alone.
-        LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-        // Taken before the client is told anything, so a game that was
-        // already playing is not mistaken for this launch's.
-        let before = preflight::games_running(&layout);
-
         // Two phases: a cold client ignores `--exec=launch` (measured: signed
         // in at 5 s, game at 53 s). A second invocation hands it over IPC.
-        let cold = {
-            let _prefix = hold_prefix();
-            match preflight::client_running(&layout) {
+        let (before, cold) = {
+            let mut prefix = hold_for_spawn(&layout, &code, Runs::BattleNet, cleared)?;
+            // Counted, so a pending wind-down leaves this launch alone.
+            prefix.launches += 1;
+            // Taken before the client is told anything, so a game that was
+            // already playing is not mistaken for this launch's.
+            let before = preflight::games_running(&layout);
+            let cold = match preflight::client_running(&layout) {
                 true => None,
                 false => {
                     // Minimized only where it signs itself in.
                     let minimize = minimized && battlenet::signs_in_by_itself(&layout, &user);
                     Some((start_client(&runner, &layout, &user, minimize)?, minimize))
                 }
-            }
+            };
+            (before, cold)
         };
         if let Some((started, minimize)) = cold {
             match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT, || preflight::client_running(&layout)) {
@@ -391,8 +409,8 @@ pub async fn launch_via_battle_net(
         }
         reap_later(battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?);
         drop(prefix);
-        if let Some(windows) = tray {
-            std::thread::spawn(move || match windows.keep_closed(Instant::now() + KEEP_IN_TRAY) {
+        if let Some((windows, mut watch)) = tray.zip(session.as_ref().map(|log| log.follow(&install_uid))) {
+            std::thread::spawn(move || match windows.keep_closed(Instant::now() + KEEP_IN_TRAY, || watch.stage()) {
                 Ok(0) => {}
                 Ok(closed) => tracing::info!("sent Battle.net's window back to the tray {closed} time(s)"),
                 Err(e) => tracing::warn!("stopped keeping Battle.net in the tray: {}", chain(&e)),
@@ -432,8 +450,7 @@ pub async fn launch_via_battle_net(
         }
         Ok(handoff)
     })
-    .await
-    .map_err(|e| Problem::of(&e))?
+    .await?
 }
 
 /// Open the client's install flow for a game, dialog and all.
@@ -448,6 +465,7 @@ pub async fn install_via_battle_net(
     user: String,
     uid: String,
     label: String,
+    cleared: (Cleared, SharedDownloads),
 ) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
@@ -460,6 +478,7 @@ pub async fn install_via_battle_net(
             tracing::warn!("Battle.net may not start as a window: {}", chain(&e));
         }
 
+        let _prefix = hold_for_spawn(&layout, &code, Runs::BattleNet, cleared)?;
         let child = battlenet::launch(&runner, &layout, &Launch::InstallFlow { uid })
             .map_err(|e| Problem::of(&e))?;
         reap_later(child);
@@ -523,7 +542,7 @@ pub async fn await_game_exit(
     game: GameProcess,
     settle_after: Option<u64>,
 ) -> Result<String, Problem> {
-    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+    off_runtime("game-exit", move || -> Result<_, Problem> {
         if let Err(e) = lightforge_core::preflight::wait_for_exit(game.pid) {
             tracing::warn!("no pidfd for {} (pid {}), polling instead: {e}", game.name, game.pid);
             while lightforge_core::preflight::games_running(&layout).iter().any(|p| p.pid == game.pid) {
@@ -539,8 +558,7 @@ pub async fn await_game_exit(
         }
         Ok(format!("{} exited", game.name))
     })
-    .await
-    .map_err(|e| Problem::of(&e))?
+    .await?
 }
 
 /// How long a game gets to close on `SIGTERM` before it is killed outright.
@@ -585,6 +603,7 @@ pub async fn quit_battle_net(layout: Layout, code: ProductCode) -> Result<String
 
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         let runner = client_runner(&layout, &code)?;
+        let _prefix = hold_prefix();
         let outcomes = preflight::quit_client(&runner, &layout, STOP_GRACE).map_err(|e| Problem::of(&e))?;
         let stuck: Vec<String> = outcomes
             .iter()
@@ -633,11 +652,13 @@ pub async fn set_battle_net_limit(
 /// Open Battle.net with no product: the way to reach everything outside the
 /// WoW family.
 ///
-/// The caller still runs pre-flight: a stale wineserver breaks Battle.net too.
+/// After a pre-flight, `cleared` and the downloads it paused: a stale
+/// wineserver breaks Battle.net too. `None` for a client up to take the request.
 pub async fn open_battle_net(
     layout: Layout,
     code: ProductCode,
     user: String,
+    cleared: Option<(Cleared, SharedDownloads)>,
 ) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
@@ -647,6 +668,10 @@ pub async fn open_battle_net(
         if let Err(e) = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(false)) {
             tracing::warn!("Battle.net may not start as a window: {}", chain(&e));
         }
+        let _prefix = match cleared {
+            Some(cleared) => hold_for_spawn(&layout, &code, Runs::BattleNet, cleared)?,
+            None => hold_prefix(),
+        };
         reap_later(battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| Problem::of(&e))?);
         Ok("Battle.net opening".to_owned())
     })

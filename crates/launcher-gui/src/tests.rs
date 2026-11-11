@@ -992,8 +992,9 @@ fn a_launch_waits_for_its_paused_download_to_come_to_rest() {
     app.launching = Some(code.clone());
 
     // Pre-flight tripped the token and returned; the run has not stopped.
-    let _ = app.update(Message::PreflightDone(Launch::Game, Ok(())));
-    assert_eq!(app.launch_when_quiet, Some(Launch::Game));
+    let cleared = tasks::hold_prefix().cleared();
+    let _ = app.update(Message::PreflightDone(Launch::Game, Ok(cleared)));
+    assert_eq!(app.launch_when_quiet, Some((Launch::Game, cleared)));
 
     let _ = app.update(Message::Downloaded(code.clone(), stopped(true)));
     assert_eq!(app.launch_when_quiet, None, "started once the run stopped");
@@ -1906,12 +1907,8 @@ fn switching_seamless_mode_off_closes_the_client_when_later_is_chosen() {
     assert!(app.quitting_client);
 }
 
-/// `CLIENT_OWED` is one flag for the whole process: tests that read it take turns.
-static CLIENT_OWED_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[test]
 fn a_client_that_gave_way_returns_once_nothing_needs_the_prefix() {
-    let _owed = CLIENT_OWED_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.config.battle_net_in_background = true;
@@ -1928,8 +1925,20 @@ fn a_client_that_gave_way_returns_once_nothing_needs_the_prefix() {
 }
 
 #[test]
+fn a_client_the_cli_closed_comes_back() {
+    let (mut app, _scratch) = test_app();
+    app.config.battle_net_in_background = true;
+    // Beside the instance lock, named after this test's own config folder.
+    let owed = app.dirs.as_ref().unwrap().instance_file("owed");
+    std::fs::write(&owed, "").unwrap();
+
+    let _ = app.update(Message::ClientSeen { up: false, game: false });
+    assert_eq!(app.client_phase, ClientPhase::SigningIn);
+    assert!(!owed.exists(), "taken, so the next poll does not start another");
+}
+
+#[test]
 fn the_background_client_waits_for_a_running_download() {
-    let _owed = CLIENT_OWED_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.config.battle_net_in_background = true;
@@ -2057,7 +2066,6 @@ fn a_game_updating_through_battle_net_lets_paused_downloads_go_on() {
 
 #[test]
 fn a_client_owed_while_a_game_runs_waits_for_the_game() {
-    let _owed = CLIENT_OWED_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.config.battle_net_in_background = true;
