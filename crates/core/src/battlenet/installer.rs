@@ -21,7 +21,7 @@ const WINDOWS_BATTLE_NET_DIR: &str = r"C:\Program Files (x86)\Battle.net";
 /// Default UI language passed to the installer.
 const DEFAULT_LOCALE: &str = "enUS";
 
-/// How long the installer gets before it is considered stuck.
+/// How long the files get to land before the installer is considered stuck.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Gap between filesystem checks while waiting for the install.
@@ -46,6 +46,15 @@ pub(super) const STDERR_LINES_SHOWN: usize = 8;
 /// launcher is written before the versioned client directory is complete.
 const SETTLE_POLLS: u32 = 3;
 
+/// How long installed files may go without the client the setup starts last,
+/// before the files alone count. That client can come and go between two
+/// polls: with no 32-bit Vulkan driver it exits about 2 s after it starts.
+/// Generous because ending early repeats the bug this wait exists for: the
+/// second pass copies the 766 MB client out and merges it back within one
+/// drive. That took under 4 s on tmpfs; one copy alone would take about 26 s
+/// on a card that writes 30 MB/s.
+const CLIENT_GRACE: Duration = Duration::from_secs(120);
+
 /// Download the installer into `cache_dir`, returning its path. Blizzard
 /// publishes no checksum for it; HTTPS is the only guarantee.
 pub async fn fetch_installer(
@@ -62,12 +71,14 @@ pub async fn fetch_installer(
 #[derive(Debug, Clone)]
 pub struct Installer {
     installer: PathBuf,
+    layout: Layout,
     install_dir: PathBuf,
     locale: String,
     timeout: Duration,
     poll_interval: Duration,
     exit_grace: Duration,
     failed_exit_grace: Duration,
+    client_grace: Duration,
 }
 
 impl Installer {
@@ -75,11 +86,13 @@ impl Installer {
     pub fn new(layout: &Layout, installer: impl Into<PathBuf>) -> Self {
         Self {
             installer: installer.into(),
+            layout: layout.clone(),
             install_dir: layout.battle_net_dir(),
             locale: DEFAULT_LOCALE.to_owned(),
             timeout: DEFAULT_TIMEOUT,
             exit_grace: EXIT_GRACE,
             failed_exit_grace: FAILED_EXIT_GRACE,
+            client_grace: CLIENT_GRACE,
             poll_interval: POLL_INTERVAL,
         }
     }
@@ -90,7 +103,7 @@ impl Installer {
         self
     }
 
-    /// Give up after `timeout` instead of the ten-minute default.
+    /// Give up on the files after `timeout` instead of the ten-minute default.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -108,6 +121,13 @@ impl Installer {
     #[cfg(test)]
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
+        self
+    }
+
+    /// How long the files may stand without the client, for tests.
+    #[cfg(test)]
+    pub fn with_client_grace(mut self, grace: Duration) -> Self {
+        self.client_grace = grace;
         self
     }
 
@@ -164,7 +184,9 @@ impl Installer {
 
         let drain = child.stderr.take().map(|pipe| std::thread::spawn(move || tail_of(pipe)));
 
-        let waited = self.wait_for_install(started, Some(&mut child));
+        let waited = self.wait_for_install(started, Some(&mut child), || {
+            crate::preflight::client_running(&self.layout)
+        });
 
         // Success leaves a client running, failure a half-finished one.
         let _ = child.kill();
@@ -197,31 +219,50 @@ impl Installer {
         }
     }
 
-    /// Poll until the install settles, the installer exits, or the timeout.
+    /// Poll until the install is done, the installer exits, or the timeout.
     ///
-    /// The files are the main signal (the installer stays up after success,
-    /// running the client), but the exit catches an installer that died in
-    /// its first second. `child` is optional for the timeout test.
+    /// Done is the files plus the client the setup starts as its last step,
+    /// which `client_up` looks for. The files alone are not enough: they land
+    /// 7 to 10 s before that client. Agent then copies the client back out of
+    /// them and merges it in a second time. A prefix killed in between left
+    /// that pass to the client's first start, which re-applied its own build
+    /// and asked to restart (measured 2026-11-10, client 2.53.8.17986). The
+    /// exit catches an installer that died in its first second. `child` is
+    /// optional for the timeout test.
     pub(super) fn wait_for_install(
         &self,
         started: Instant,
         mut child: Option<&mut Child>,
+        client_up: impl Fn() -> bool,
     ) -> Result<InstallOutcome, Wait> {
         let mut settled = 0;
+        // When the files were first seen, to time the client's grace from.
+        let mut landed: Option<Instant> = None;
         let mut exit: Option<(Instant, Option<i32>)> = None;
 
         loop {
             if is_installed(&self.install_dir) {
                 settled += 1;
+                let since = *landed.get_or_insert_with(Instant::now);
                 if settled >= SETTLE_POLLS {
-                    return Ok(InstallOutcome {
-                        install_dir: self.install_dir.clone(),
-                        skipped: false,
-                        waited: started.elapsed(),
-                    });
+                    let client = client_up();
+                    if client || since.elapsed() >= self.client_grace {
+                        if !client {
+                            tracing::warn!(
+                                "no Battle.net client within {:?} of the install landing; taking the files as done",
+                                self.client_grace,
+                            );
+                        }
+                        return Ok(InstallOutcome {
+                            install_dir: self.install_dir.clone(),
+                            skipped: false,
+                            waited: started.elapsed(),
+                        });
+                    }
                 }
             } else {
                 settled = 0;
+                landed = None;
             }
 
             if exit.is_none() {
@@ -233,7 +274,9 @@ impl Installer {
             }
 
             // An exit is not a failure yet, the files may still be landing.
-            if let Some((at, code)) = exit {
+            // Once they have, the client's grace decides instead: it can
+            // outlast this one.
+            if let (Some((at, code)), None) = (exit, landed) {
                 let grace = match code {
                     Some(0) | None => self.exit_grace,
                     Some(_) => self.failed_exit_grace,
@@ -243,7 +286,9 @@ impl Installer {
                 }
             }
 
-            if started.elapsed() >= self.timeout {
+            // Likewise the timeout: it is for the files to land, and once they
+            // have, the client's grace bounds the wait.
+            if started.elapsed() >= self.timeout && landed.is_none() {
                 return Err(Wait::TimedOut);
             }
             std::thread::sleep(self.poll_interval);
