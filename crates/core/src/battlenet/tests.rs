@@ -540,7 +540,7 @@ fn an_installer_that_dies_is_reported_as_exited_not_timed_out() {
 
     let started = Instant::now();
     let err = installer
-        .wait_for_install(started, Some(&mut child))
+        .wait_for_install(started, Some(&mut child), || false)
         .unwrap_err();
 
     assert_eq!(err, Wait::Exited(Some(3)));
@@ -581,10 +581,143 @@ fn files_landing_after_a_clean_exit_still_count() {
     };
 
     let outcome = installer
-        .wait_for_install(Instant::now(), Some(&mut child))
+        .wait_for_install(Instant::now(), Some(&mut child), || true)
         .expect("files arriving within the grace period is a success");
     assert!(!outcome.skipped);
     writer.join().unwrap();
+}
+
+/// A finished install on disk, as Agent's first pass leaves it.
+fn landed(layout: &Layout) {
+    let install_dir = layout.battle_net_dir();
+    std::fs::create_dir_all(install_dir.join("Battle.net.15000")).unwrap();
+    std::fs::write(install_dir.join("Battle.net Launcher.exe"), b"MZ").unwrap();
+}
+
+/// The files land 7 to 10 s before the setup is done: Agent merges the client
+/// in a second time, then the setup starts it. Stopping on the files alone left
+/// that pass to the client's first start, which re-applied its own build and
+/// asked to restart.
+#[test]
+fn the_install_is_done_when_the_setup_starts_the_client_not_when_the_files_land() {
+    let dir = scratch("client-starts");
+    let layout = Layout::with_root(&dir);
+    landed(&layout);
+    let installer = Installer::new(&layout, dir.join("setup.exe"))
+        .with_timeout(Duration::from_secs(60))
+        .with_poll_interval(Duration::from_millis(10))
+        .with_client_grace(Duration::from_secs(30));
+
+    let started = Instant::now();
+    let client_after = Duration::from_millis(200);
+    let outcome = installer
+        .wait_for_install(started, None, || started.elapsed() >= client_after)
+        .expect("the client showing up ends the wait");
+
+    assert!(outcome.waited >= client_after, "stopped on the files alone, after {:?}", outcome.waited);
+    assert!(outcome.waited < Duration::from_secs(5), "the client was up: {:?}", outcome.waited);
+}
+
+/// With no 32-bit Vulkan driver the client the setup starts dies after about
+/// 2 s, between two polls. The install itself is whole and must not wait out
+/// the ten-minute timeout.
+#[test]
+fn files_without_a_client_count_once_its_grace_is_over() {
+    let dir = scratch("client-never");
+    let layout = Layout::with_root(&dir);
+    landed(&layout);
+    let grace = Duration::from_millis(150);
+    let installer = Installer::new(&layout, dir.join("setup.exe"))
+        .with_timeout(Duration::from_secs(60))
+        .with_poll_interval(Duration::from_millis(10))
+        .with_client_grace(grace);
+
+    let started = Instant::now();
+    let outcome = installer
+        .wait_for_install(started, None, || false)
+        .expect("whole files count once the grace is over");
+
+    assert!(outcome.waited >= grace, "the client had no time to appear: {:?}", outcome.waited);
+    assert!(outcome.waited < Duration::from_secs(5), "waited out the timeout: {:?}", outcome.waited);
+}
+
+/// A `--timeout` is for the files to appear. Once they have, the client's
+/// grace ends the wait, even past the timeout: the install is on disk.
+#[test]
+fn a_timeout_after_the_files_landed_is_not_a_failure() {
+    let dir = scratch("timeout-after-files");
+    let layout = Layout::with_root(&dir);
+    landed(&layout);
+    let installer = Installer::new(&layout, dir.join("setup.exe"))
+        .with_timeout(Duration::from_millis(30))
+        .with_poll_interval(Duration::from_millis(10))
+        .with_client_grace(Duration::from_millis(150));
+
+    let outcome = installer.wait_for_install(Instant::now(), None, || false);
+    assert!(outcome.is_ok(), "{outcome:?}");
+}
+
+/// Files that go away and come back start the client's grace again: what
+/// counts is how long the install has stood, not when it was first glimpsed.
+#[test]
+fn the_grace_counts_from_when_the_files_are_back() {
+    let dir = scratch("files-back");
+    let layout = Layout::with_root(&dir);
+    landed(&layout);
+    let grace = Duration::from_millis(300);
+    let installer = Installer::new(&layout, dir.join("setup.exe"))
+        .with_timeout(Duration::from_secs(60))
+        .with_poll_interval(Duration::from_millis(10))
+        .with_client_grace(grace);
+
+    let back_after = Duration::from_millis(400);
+    let flicker = {
+        let layout = layout.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            std::fs::remove_file(layout.battle_net_dir().join("Battle.net Launcher.exe")).unwrap();
+            std::thread::sleep(back_after - Duration::from_millis(50));
+            landed(&layout);
+        })
+    };
+
+    let outcome = installer
+        .wait_for_install(Instant::now(), None, || false)
+        .expect("whole files count once the grace is over");
+    flicker.join().unwrap();
+    // From the first sighting it would end soon after the files are back;
+    // from their return, a whole grace later. Halfway tells the two apart.
+    assert!(
+        outcome.waited >= back_after + grace / 2,
+        "the grace ran from the first sighting: {:?}",
+        outcome.waited
+    );
+}
+
+/// The setup exits right after it starts the client. Once the files are in,
+/// that exit is no failure, even when the wait for the client outlasts the
+/// exit's own grace.
+#[test]
+fn an_exit_after_the_files_landed_is_not_a_failure() {
+    let dir = scratch("exit-after-files");
+    let layout = Layout::with_root(&dir);
+    landed(&layout);
+    let installer = Installer::new(&layout, dir.join("setup.exe"))
+        .with_timeout(Duration::from_secs(60))
+        .with_poll_interval(Duration::from_millis(10))
+        .with_exit_grace(Duration::from_millis(20), Duration::from_millis(20))
+        .with_client_grace(Duration::from_millis(200));
+
+    let mut child = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("exit 0")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn");
+
+    let outcome = installer.wait_for_install(Instant::now(), Some(&mut child), || false);
+    assert!(outcome.is_ok(), "{outcome:?}");
 }
 
 #[test]
@@ -627,7 +760,7 @@ fn a_stalled_installer_times_out_instead_of_hanging() {
         .with_timeout(Duration::from_millis(60))
         .with_poll_interval(Duration::from_millis(10));
 
-    let err = installer.wait_for_install(Instant::now(), None).unwrap_err();
+    let err = installer.wait_for_install(Instant::now(), None, || false).unwrap_err();
     assert_eq!(err, Wait::TimedOut);
 }
 
