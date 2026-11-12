@@ -116,3 +116,15 @@ pub(crate) const STEAM_ART: lightforge_core::steam_shortcut::Artwork<'static> = 
         icon: Image { bytes: include_bytes!("../assets/steam/icon.png"), ext: "png" },
     }
 };
+
+/// The window's own icon, for a build that no desktop entry names (`cargo run`,
+/// a bare copy of the binary); an installed one gets its icon from the entry.
+///
+/// The 128x128 hicolor PNG, read from `packaging/icons` so the artwork has one
+/// source. winit hands X11 a single size and the panel scales it, so the size
+/// is a trade. 128 costs 12 KB of PNG (the release binary grew 16 KB with the
+/// code around it) and 64 KiB of pixels decoded once. Scaled to a 96 px panel
+/// icon (a 48 px slot at 2x), 64x64 (4.6 KB) lands 4.2% RMSE from the 512
+/// master and 128 lands 1.0%; 256 would add 18 KB to reach 0.24%.
+pub(crate) const WINDOW_ICON: &[u8] =
+    include_bytes!("../../../packaging/icons/hicolor/128x128/apps/pro.tuxcore.Lightforge.png");

@@ -100,6 +100,31 @@ pub fn decode_bundled(bytes: &'static [u8]) -> Handle {
     }
 }
 
+/// The window icon, from a bundled PNG.
+///
+/// `None` if it does not decode, after a line in the log: a taskbar with the
+/// generic placeholder is a launcher that works, and refusing to open over a
+/// picture is not. Not `iced::window::icon::from_file_data`: that needs iced's
+/// `image` feature, which turns on every codec of iced's own image 0.25 (the
+/// iced entry in the workspace `Cargo.toml` has the cost).
+pub fn window_icon(bytes: &[u8]) -> Option<iced::window::Icon> {
+    let rgba = match image::load_from_memory(bytes) {
+        Ok(decoded) => decoded.into_rgba8(),
+        Err(e) => {
+            tracing::warn!("window icon not decoded, the window gets none: {e}");
+            return None;
+        }
+    };
+    let (width, height) = rgba.dimensions();
+    match iced::window::icon::from_rgba(rgba.into_raw(), width, height) {
+        Ok(icon) => Some(icon),
+        Err(e) => {
+            tracing::warn!("window icon refused, the window gets none: {e}");
+            None
+        }
+    }
+}
+
 /// A product wordmark, cropped to the pixels that are actually drawn.
 ///
 /// Every logo shares a 704x440 canvas, but the marks inside differ (127px to
