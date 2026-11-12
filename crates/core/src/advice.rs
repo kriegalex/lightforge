@@ -317,7 +317,11 @@ fn damaged() -> Advice {
 }
 
 fn runtime() -> Advice {
-    let remedy = crate::runtime::remedy();
+    runtime_for(&crate::runtime::OsRelease::read())
+}
+
+fn runtime_for(os: &crate::runtime::OsRelease) -> Advice {
+    let remedy = crate::runtime::remedy_for(os);
     let todo = match &remedy.note {
         Some(note) => format!("Install your distribution's 32-bit Wine package. {note}"),
         None => "Install your distribution's 32-bit Wine package, then try again.".to_owned(),
