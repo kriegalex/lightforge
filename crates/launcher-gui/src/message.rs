@@ -256,8 +256,11 @@ pub(crate) enum Message {
     Tweak(Scope, Tweak, bool),
     /// The environment-variable editor was typed in.
     EnvEdit(Scope, iced::widget::text_editor::Action),
-    /// Typing in the env editor paused; the number says after which edit.
+    /// Typing in the env editor or the launch options paused; the number says
+    /// after which edit.
     EnvSettled(u64),
+    /// The launch options in Game Settings were typed in.
+    LaunchOptionsTyped(String),
     /// Typing in the folder to move the Wine prefix to.
     PrefixFolderTyped(String),
     BrowsePrefixFolder,
@@ -548,6 +551,8 @@ pub(crate) enum Message {
     FamiliesRead(Box<lightforge_core::families::Families>),
     /// Fetch one addon again and replace what it wrote.
     ReinstallAddon(String, String),
+    /// Turn the addon manager on or off, from setup or Settings.
+    AddonManager(bool),
     /// Whether addons update themselves unless they say otherwise.
     AddonAutoUpdateDefault(bool),
     /// Update whatever updates itself, for the product on screen.

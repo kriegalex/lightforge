@@ -18,7 +18,7 @@ impl Lightforge {
             }
 
             Message::CloseRequested(id) => {
-                // An env edit still waiting for typing to pause.
+                // A typed edit still waiting for typing to pause.
                 if self.env_unsaved {
                     self.save_config();
                 }
@@ -233,7 +233,7 @@ impl Lightforge {
                 match self.config.battle_net_in_background {
                     true => Task::done(Message::UpgradeRestart),
                     false => Task::perform(
-                        tasks::close_background_client(self.layout.clone(), self.config.prefix_user.clone()),
+                        tasks::close_background_client(self.config.clone(), self.layout.clone()),
                         |_| Message::UpgradeRestart,
                     ),
                 }

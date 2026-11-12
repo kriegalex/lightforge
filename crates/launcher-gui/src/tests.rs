@@ -1560,6 +1560,35 @@ fn an_env_edit_still_waiting_is_saved_when_the_window_closes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// The launch options share the env editor's save-on-pause, and belong to
+// the game the panel shows, not to every game.
+#[test]
+fn launch_options_are_the_shown_games_and_saved_once_typing_pauses() {
+    let dir = std::env::temp_dir().join(format!("lightforge-optionsave-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let dirs = AppDirs::with_dirs(dir.join("config"), dir.join("cache"), dir.join("data"));
+    std::fs::create_dir_all(dirs.config_dir()).unwrap();
+
+    let (mut app, _scratch) = test_app();
+    app.dirs = Some(dirs.clone());
+    app.config_error = None;
+    let shown = app.selected.code.clone();
+
+    for line in ["~", "~/.local/bin/wow.sh %command%"] {
+        let _ = app.update(Message::LaunchOptionsTyped(line.to_owned()));
+    }
+    assert!(!dirs.config_file().exists(), "nothing written while typing");
+
+    let _ = app.update(Message::EnvSettled(app.env_edits));
+    let saved = Config::load_or_default(&dirs.config_file()).unwrap();
+    assert_eq!(saved.product(&shown).unwrap().profile.launch_options, "~/.local/bin/wow.sh %command%");
+    assert!(
+        saved.products.iter().filter(|p| p.code != shown).all(|p| p.profile.launch_options.is_empty()),
+        "no other game got them"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn paused_pre_download(code: ProductCode) -> Download {
     Download {
         code,
@@ -1656,6 +1685,32 @@ fn a_committed_copy_points_the_config_at_the_new_library_first() {
     let saved = Config::load_or_default(&dir.join("config/config.toml")).unwrap();
     assert_eq!(saved.product(&code).unwrap().profile.library.as_deref(), Some(to.as_str()));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Keyed by the AddOns folder's path, a ledger left behind would show every
+/// addon of the moved game as unmanaged.
+#[test]
+fn a_committed_copy_takes_the_addon_ledger_along() {
+    use lightforge_core::addons::{manage, Ledger};
+
+    let (mut app, scratch) = test_app();
+    app.track_selected();
+    let code = app.selected.code.clone();
+    let mut move_ = moving(code.clone());
+    move_.from = library::Library::main_at(scratch.path().join("a/games"), "A");
+    move_.to = library::Library::adopted(scratch.path().join("b/games"), "B");
+    app.config.libraries = vec![move_.from.clone(), move_.to.clone()];
+    app.config.product_mut(&code).unwrap().profile.library = Some(move_.from.id.clone());
+    app.rebuild_layout();
+    let data = app.dirs.as_ref().unwrap().data_dir().to_path_buf();
+    let before = manage::ledger_path(&data, &app.layout.addons_dir(&code), &code);
+    Ledger::default().save(&before).unwrap();
+    app.moving = Some(move_);
+
+    let _ = app.update(Message::GameCopied(code.clone(), Ok(lightforge_core::migrate::Moved::Copied { files: 1, bytes: 1 })));
+
+    assert!(!before.exists());
+    assert!(manage::ledger_path(&data, &app.layout.addons_dir(&code), &code).is_file());
 }
 
 /// Releasing now would delete the copy the config on disk still points at.
