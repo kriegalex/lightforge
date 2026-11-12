@@ -16,7 +16,8 @@
 //! Both are only a floor: the 32-bit graphics stack is dlopened and invisible
 //! to them. On Fedora 44 `glibc.i686` + `freetype.i686` passes both and the
 //! installer still exits 1. So [`remedy_for`] names the 32-bit *Wine*
-//! package, whose dependencies are the closure needed. Past the floor,
+//! package, whose dependencies are the closure needed; Arch has none, so
+//! there it names the `lib32` libraries. Past the floor,
 //! [`crate::battlenet::BattleNetError::InstallerExited`] carries stderr.
 
 use std::path::{Path, PathBuf};
@@ -36,12 +37,15 @@ const LOADER_CANDIDATES: &[&str] = &[
 ];
 
 /// What to tell someone whose 32-bit runtime is missing and whose
-/// distribution we do not recognise.
+/// distribution we do not recognise. `NoLoader`, `WineFailed` and `NoTls`
+/// without a Steam install end with it too, since an error cannot know the
+/// distribution.
 ///
 /// Names what is required, not a package: `dnf install wine` on Fedora 44
-/// installs nothing 32-bit.
-pub const ADVICE: &str = "install the 32-bit (i686/i386) build of Wine that your distribution \
-ships — Lightforge does not use it, but it pulls in the whole 32-bit library stack Proton needs";
+/// installs nothing 32-bit, and Arch has no 32-bit Wine at all, so the Wine
+/// build is only offered to a distribution that ships one.
+pub const ADVICE: &str = "install your distribution's 32-bit libraries; where it ships a 32-bit \
+(i686/i386) build of Wine, installing it pulls in the whole stack Proton needs, though Lightforge does not use it";
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -155,6 +159,29 @@ mod tests {
                 !ADVICE.contains(rotting),
                 "fallback advice mentions `{rotting}`, which ties it to one distribution"
             );
+        }
+    }
+
+    /// Arch ships no 32-bit Wine, so an error that tells its reader to
+    /// install one sends them after a package that is not there. The advice
+    /// in every error asks for the libraries and offers the Wine build only
+    /// to a distribution that ships one.
+    #[test]
+    fn the_errors_ask_for_libraries_not_for_a_wine_build() {
+        let errors = [
+            RuntimeError::NoLoader { candidates: "/lib/ld-linux.so.2".to_owned() },
+            RuntimeError::WineFailed { wine: "/proton/bin/wine".into(), code: Some(127), stderr: String::new() },
+            RuntimeError::NoTls { install: None },
+        ];
+        for error in errors {
+            let message = error.to_string();
+            let advice = message.rsplit(" — ").next().unwrap_or_default();
+            assert!(advice.starts_with("install your distribution's 32-bit libraries"), "{message}");
+            // Wine is still named, but only after the condition that keeps Arch out of it.
+            let (Some(condition), Some(wine)) = (advice.find("where it ships"), advice.find("Wine")) else {
+                panic!("{message}")
+            };
+            assert!(condition < wine, "{message}");
         }
     }
 
@@ -834,7 +861,7 @@ mod container_tests {
     }
 
     #[test]
-    fn without_steam_the_message_names_the_32_bit_wine() {
+    fn without_steam_the_message_says_what_to_install() {
         let rendered = RuntimeError::NoTls { install: None }.to_string();
         assert!(rendered.contains("gnutls") && rendered.contains(ADVICE), "{rendered}");
         let rendered = RuntimeError::NoTls { install: Some(4183110) }.to_string();

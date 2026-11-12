@@ -23,10 +23,49 @@ The launcher checks for this and shows the command for your distro.
 [INSTALL.md](INSTALL.md#to-use-battlenet) has the table; on Fedora it's
 `sudo dnf install wine.i686`.
 
+On Arch, if the installer's error output has
+`nodrv_CreateWindow: no driver could be loaded` in it, Wine has no window driver:
+it needs the 32-bit libX11 and libXext, and `lib32-mesa` brings both. The
+`wine` package is no use here; on Arch it is 64-bit only.
+
+```bash
+sudo pacman -S lib32-mesa
+```
+
 If you've installed the 32-bit packages and it *still* exits immediately,
 please tell me. It means the check passed and something else is missing that
 the check can't see. Send a report; it includes the installer's own error
 output.
+
+### Battle.net closes about two seconds after it starts
+
+The installer finished, but when Battle.net starts, no window shows and it
+closes after about two seconds. On Arch this happens when the 32-bit Vulkan
+loader (`lib32-vulkan-icd-loader`) is installed and no 32-bit driver is.
+
+Battle.net is a 32-bit program. Its GPU process logs these two lines and
+exits:
+
+```
+Extension not supported: VK_KHR_surface
+Exiting GPU process
+```
+
+The loader only finds Vulkan drivers; it isn't one, and with none to find the
+GPU process has nothing to draw with. `pacman -Qq | grep lib32-vulkan` lists
+what you have: if only `lib32-vulkan-icd-loader` shows up, that is probably
+the cause.
+
+Install the 32-bit driver for your GPU (multilib must be enabled):
+
+```bash
+sudo pacman -S lib32-vulkan-radeon   # AMD
+sudo pacman -S lib32-vulkan-intel    # Intel
+sudo pacman -S lib32-nvidia-utils    # NVIDIA
+```
+
+Only the AMD one has been tried for this. The Intel and NVIDIA packages are
+the ones those drivers ship.
 
 ### "the prefix at … has not been created yet", or "no Battle.net install at …"
 
