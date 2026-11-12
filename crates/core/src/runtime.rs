@@ -16,7 +16,8 @@
 //! Both are only a floor: the 32-bit graphics stack is dlopened and invisible
 //! to them. On Fedora 44 `glibc.i686` + `freetype.i686` passes both and the
 //! installer still exits 1. So [`remedy_for`] names the 32-bit *Wine*
-//! package, whose dependencies are the closure needed. Past the floor,
+//! package, whose dependencies are the closure needed; Arch has none, so
+//! there it names the `lib32` libraries. Past the floor,
 //! [`crate::battlenet::BattleNetError::InstallerExited`] carries stderr.
 
 use std::path::{Path, PathBuf};

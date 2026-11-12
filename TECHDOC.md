@@ -276,7 +276,9 @@ moving any files.
   32-bit loader before Proton is downloaded, and runs Proton's own 32-bit wine
   before the Battle.net step. Neither check can prove the 32-bit *graphics*
   stack is there, so the suggested fix names the distribution's 32-bit Wine
-  package: its dependencies are what's actually needed.
+  package where it has one: its dependencies are what's actually needed. Arch
+  has none (its `wine` is 64-bit only, and Proton brings its own 32-bit Wine),
+  so there the fix names the `lib32` libraries themselves.
 - **`preflight.rs`** makes sure everything is ready before Battle.net starts:
   no stale Agent holding a lock, no leftover wineserver, and any download that
   writes to the CASC store paused first. Two writers in one store can really

@@ -322,9 +322,24 @@ fn runtime() -> Advice {
 
 fn runtime_for(os: &crate::runtime::OsRelease) -> Advice {
     let remedy = crate::runtime::remedy_for(os);
+    // The first sentence names a Wine package, so it has to be one the command
+    // installs. Arch has none: its `wine` is 64-bit only and Proton brings its
+    // own 32-bit one, so its command installs lib32 libraries. With no
+    // command, a system with no note either is one the table does not know,
+    // and the Wine package is the best pointer there is. NixOS, SteamOS and
+    // an image-based system the table has no package for have a note and
+    // nothing to install, so they are not sent for a package.
+    let wine_package = match &remedy.command {
+        Some(command) => command.contains("wine"),
+        None => remedy.note.is_none(),
+    };
+    let lead = match wine_package {
+        true => "Install your distribution's 32-bit Wine package",
+        false => "Install the 32-bit libraries Battle.net needs",
+    };
     let todo = match &remedy.note {
-        Some(note) => format!("Install your distribution's 32-bit Wine package. {note}"),
-        None => "Install your distribution's 32-bit Wine package, then try again.".to_owned(),
+        Some(note) => format!("{lead}. {note}"),
+        None => format!("{lead}, then try again."),
     };
     Advice { todo, fix: remedy.command.map(Fix::CopyCommand) }
 }
@@ -406,5 +421,77 @@ mod tests {
     fn a_running_game_says_to_close_it() {
         let error = crate::preflight::PreflightError::GameRunning(Vec::new());
         assert!(advise(&error).unwrap().todo.starts_with("Close the game"));
+    }
+
+    fn os(id: &str, id_like: &str) -> crate::runtime::OsRelease {
+        crate::runtime::OsRelease { id: id.to_owned(), id_like: id_like.to_owned(), ..Default::default() }
+    }
+
+    /// Arch has no 32-bit Wine package: its `wine` is 64-bit only. Told to
+    /// install one, a player looks for a package that is not there, while
+    /// the command underneath installs the lib32 libraries that are missing.
+    #[test]
+    fn arch_is_not_told_to_install_a_wine_package() {
+        for (id, id_like) in [("arch", ""), ("cachyos", "arch"), ("endeavouros", "arch")] {
+            let advice = runtime_for(&os(id, id_like));
+            assert!(!advice.todo.contains("Wine"), "{id}: {}", advice.todo);
+            assert!(advice.todo.contains("multilib"), "{id} keeps its note: {}", advice.todo);
+            match advice.fix {
+                Some(Fix::CopyCommand(command)) => {
+                    assert!(command.starts_with("sudo pacman -S "), "{id}: {command}");
+                    assert!(command.contains("lib32-"), "{id}: {command}");
+                }
+                other => panic!("{id} should get a command to copy, got {other:?}"),
+            }
+        }
+    }
+
+    /// Where the 32-bit Wine package exists, naming it is right: its
+    /// dependencies are the stack Battle.net needs. An image-based system
+    /// layers the same package, and its note only says how.
+    #[test]
+    fn a_distribution_with_a_32_bit_wine_package_is_told_to_install_it() {
+        for (id, id_like, atomic, package) in [
+            ("fedora", "", false, "wine.i686"),
+            ("debian", "", false, "wine32"),
+            ("ubuntu", "debian", false, "wine32"),
+            ("opensuse-tumbleweed", "opensuse suse", false, "wine-32bit"),
+            ("bazzite", "fedora", true, "wine.i686"),
+            ("opensuse-aeon", "opensuse suse", true, "wine-32bit"),
+        ] {
+            let advice = runtime_for(&crate::runtime::OsRelease { atomic, ..os(id, id_like) });
+            assert!(
+                advice.todo.starts_with("Install your distribution's 32-bit Wine package"),
+                "{id}: {}",
+                advice.todo
+            );
+            match advice.fix {
+                Some(Fix::CopyCommand(command)) => assert!(command.contains(package), "{id}: {command}"),
+                other => panic!("{id} should get a command to copy, got {other:?}"),
+            }
+        }
+    }
+
+    /// A system the table does not know has nothing to copy, so the advice
+    /// can only say what to look for.
+    #[test]
+    fn an_unknown_distribution_is_pointed_at_its_32_bit_wine_package() {
+        let advice = runtime_for(&os("某", ""));
+        assert!(advice.todo.contains("32-bit Wine package"), "{}", advice.todo);
+        assert_eq!(advice.fix, None);
+    }
+
+    /// There is no package to install on NixOS, SteamOS says it ships the
+    /// libraries already, and an image-based system the table has no package
+    /// for says how to layer one: the note carries the advice. SteamOS
+    /// reports `ID_LIKE=arch`, so this also pins that it is not read as Arch.
+    #[test]
+    fn a_system_with_no_package_to_install_is_not_sent_for_one() {
+        for (id, id_like, atomic) in [("nixos", "", false), ("steamos", "arch", false), ("endless", "", true)] {
+            let advice = runtime_for(&crate::runtime::OsRelease { atomic, ..os(id, id_like) });
+            assert!(advice.todo.starts_with("Install the 32-bit libraries Battle.net needs. "), "{id}: {}", advice.todo);
+            assert!(!advice.todo.contains("Wine package"), "{id}: {}", advice.todo);
+            assert_eq!(advice.fix, None, "{id}");
+        }
     }
 }
