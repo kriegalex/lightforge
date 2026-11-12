@@ -48,6 +48,7 @@ rustPlatform.buildRustPackage {
       # Installed below by the GUI package; core's identity test reads them in both.
       ../../packaging/pro.tuxcore.Lightforge.desktop
       ../../packaging/pro.tuxcore.Lightforge.metainfo.xml
+      # The 128x128 PNG is also `include_bytes!`d by the GUI, for its window icon.
       ../../packaging/icons
       # `include_str!`d by core.
       ../../RELEASES.md

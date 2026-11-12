@@ -2339,3 +2339,19 @@ fn a_battle_net_repair_waits_for_a_running_setup() {
     let _ = app.update(Message::RepairBattleNet);
     assert!(app.error.is_some());
 }
+
+#[test]
+fn the_window_icon_is_a_square_of_the_bundled_size_with_something_drawn() {
+    let (rgba, size) = art::window_icon(WINDOW_ICON).expect("the bundled icon decodes").into_raw();
+    assert_eq!((size.width, size.height), (128, 128));
+    assert_eq!(rgba.len(), 128 * 128 * 4);
+    // A wrong file decodes too; this one has to have opaque pixels, or the
+    // taskbar shows an empty square.
+    assert!(rgba.iter().skip(3).step_by(4).any(|&alpha| alpha == 255));
+}
+
+#[test]
+fn a_window_icon_that_does_not_decode_leaves_the_window_without_one() {
+    assert!(art::window_icon(b"not a picture").is_none());
+    assert!(art::window_icon(&WINDOW_ICON[..WINDOW_ICON.len() / 2]).is_none());
+}

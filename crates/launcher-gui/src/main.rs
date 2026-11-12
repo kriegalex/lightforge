@@ -180,6 +180,9 @@ fn main() -> iced::Result {
         decorations: false,
         transparent: true,
         position: iced::window::Position::SpecificWith(fit::centred),
+        // `_NET_WM_ICON` on X11. winit 0.30 ignores it on Wayland, where the
+        // desktop entry that `application_id` names is the only source.
+        icon: art::window_icon(WINDOW_ICON),
         // The Wayland `app_id` / X11 `WM_CLASS`: how the compositor finds the
         // desktop entry, and so the icon.
         platform_specific: iced::window::settings::PlatformSpecific {

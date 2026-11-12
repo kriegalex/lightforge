@@ -57,7 +57,10 @@ basename **and** the window's Wayland `app_id` (`APP_ID` in
 `crates/core/src/identity.rs`). A compositor matches a running window to its
 installed desktop entry by that string and by nothing else, so if one of the
 three changes and the others do not, the taskbar shows a placeholder instead
-of the icon.
+of the icon. On X11 the window also carries the icon itself, the `128x128` PNG
+under `icons/hicolor` that the GUI compiles in (`WINDOW_ICON` in its
+`icons.rs`), so that file has to stay where the build finds it; winit cannot
+set a window icon on native Wayland.
 
 ## Building the packages
 
